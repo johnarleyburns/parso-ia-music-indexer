@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"database/sql"
 	"fmt"
 
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/config"
@@ -50,39 +51,42 @@ var keys = keyMap{
 }
 
 type MainModel struct {
-	Config   *config.Config
-	Tabs     []string
+	Config    *config.Config
+	Tabs      []string
 	ActiveTab int
+
+	DB *sql.DB
 
 	Dashboard DashboardModel
 	LiveLog   LiveLogModel
 	Browse    BrowseModel
 	Player    PlayerModel
 
-	Help   help.Model
-	Keys   keyMap
+	Help help.Model
+	Keys keyMap
 
 	Width  int
 	Height int
 	Ready  bool
 }
 
-func NewMainModel(cfg *config.Config) MainModel {
+func NewMainModel(cfg *config.Config, sqlDB *sql.DB) MainModel {
 	return MainModel{
-		Config:   cfg,
-		Tabs:     []string{"Dashboard", "Live Log", "Browse", "Player"},
+		Config:    cfg,
+		Tabs:      []string{"Dashboard", "Live Log", "Browse", "Player"},
 		ActiveTab: 0,
-		Dashboard: NewDashboardModel(),
+		DB:        sqlDB,
+		Dashboard: NewDashboardModel(sqlDB),
 		LiveLog:   NewLiveLogModel(),
 		Browse:    NewBrowseModel(),
 		Player:    NewPlayerModel(),
-		Help:     help.New(),
-		Keys:     keys,
+		Help:      help.New(),
+		Keys:      keys,
 	}
 }
 
 func (m MainModel) Init() tea.Cmd {
-	return nil
+	return m.Dashboard.Init()
 }
 
 func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -107,18 +111,33 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Height = msg.Height
 		m.Help.SetWidth(msg.Width)
 		m.Ready = true
-		m.Dashboard.Width = msg.Width
-		m.Dashboard.Height = msg.Height
-		m.LiveLog.Width = msg.Width
-		m.LiveLog.Height = msg.Height
-		m.Browse.Width = msg.Width
-		m.Browse.Height = msg.Height
-		m.Player.Width = msg.Width
-		m.Player.Height = msg.Height
-		return m, nil
+
+		var cmd tea.Cmd
+		m.Dashboard, cmd = m.Dashboard.Update(msg)
+		m.LiveLog, _ = m.LiveLog.Update(msg)
+		m.Browse, _ = m.Browse.Update(msg)
+		m.Player, _ = m.Player.Update(msg)
+		return m, cmd
+
+	case statsRefreshMsg:
+		var cmd tea.Cmd
+		m.Dashboard, cmd = m.Dashboard.Update(msg)
+		return m, cmd
 	}
 
-	return m, nil
+	var cmd tea.Cmd
+	switch m.ActiveTab {
+	case 0:
+		m.Dashboard, cmd = m.Dashboard.Update(msg)
+	case 1:
+		m.LiveLog, cmd = m.LiveLog.Update(msg)
+	case 2:
+		m.Browse, cmd = m.Browse.Update(msg)
+	case 3:
+		m.Player, cmd = m.Player.Update(msg)
+	}
+
+	return m, cmd
 }
 
 func (m MainModel) View() tea.View {

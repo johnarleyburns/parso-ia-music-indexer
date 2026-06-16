@@ -2,135 +2,74 @@
 
 ## Date: 2026-06-16
 
-## Status: PLANNING COMPLETE (Revision 2) — TUI-Based, Scriptless
+## Status: PHASE 2 COMPLETE — Database layer with SQLite, vector storage, and live TUI stats
 
 ## Completed Phases
 
 - [x] Research — Chat session analysis, IA API research, ML model research, database comparison, TUI framework research
 - [x] Design — Architecture design (Rev 2: TUI-based), data model design, component specifications, event system design
 - [x] Planning — 7-phase implementation plan with per-phase exit criteria, e2e test suite plan
+- [x] Phase 1 — TUI Scaffold & Navigation
+- [x] Phase 2 — Database Layer + Embedding Operations
 
 ## Pending Phases
 
-- [ ] Phase 1 — TUI Scaffold & Navigation
-- [ ] Phase 2 — Database Layer + Embedding Operations
 - [ ] Phase 3 — Dashboard Tab: Live Stats & Controls
 - [ ] Phase 4 — IA Scraping API Client + Real Coordinator
 - [ ] Phase 5 — Audio Analysis Pipeline + Real Worker Pool
 - [ ] Phase 6 — Browse / Search Tab
 - [ ] Phase 7 — Player Tab
 
-## Architecture (Revision 2 Key Changes from Rev 1)
+## Phase 2 Deliverables
 
-| Aspect | Rev 1 (Shell Scripts) | Rev 2 (TUI) |
-|---|---|---|
-| Entry point | 3+ binaries (coordinator, worker, search) | 1 binary (TUI or --headless) |
-| Orchestration | Shell scripts (`scripts/*.sh`) | Bubble Tea TUI (4 tabs) |
-| Worker mgmt | Separate Go processes | Goroutines managed by TUI model |
-| Progress view | No live view (log files) | Dashboard with live stats, progress bars, activity feed |
-| Search | Ad-hoc CLI | Browse tab with textinput + table |
-| Playback | None | Player tab via beep/v2 |
-| Testing | Unit + integration | Full e2e suite via --headless mode |
-| Shell scripts | Required | **Eliminated** |
+### Files Created
+- `internal/db/db.go` — SQLite open (WAL mode, busy timeout 5s), migration (idempotent)
+- `internal/db/queue.go` — `ClaimNextBatch` (optimistic locking), `MarkCompleted`, `MarkFailed`, `ResetStuckJobs`, `GetStats`, `BulkInsertPending`
+- `internal/db/embeddings.go` — `SaveEmbedding`, `QuerySimilar` (brute-force cosine, pure Go), `GetEmbeddingCount`, BLOB encode/decode helpers
+- `internal/db/db_test.go` — 10 unit tests covering all DB operations
 
-### TUI Tabs
+### Files Modified
+- `internal/tui/dashboard.go` — Real DB stats table with auto-refresh (2s tick), styled with colors per status
+- `internal/tui/model.go` — Added `*sql.DB` field, wired Dashboard init/update/view, routes `statsRefreshMsg`
+- `cmd/tui/main.go` — Opens DB on startup (TUI + headless), headless prints full JSON stats
 
-| Tab | Purpose |
-|---|---|
-| Dashboard | DB stats (auto-refresh), coordinator/worker controls, progress bars, activity feed |
-| Live Log | Full-screen scrollable event stream (color-coded) |
-| Browse | Search bar, results table, vector similarity queries |
-| Player | Play/pause/stop/seek/volume, play queue |
+### Dependencies Added
+- `github.com/mattn/go-sqlite3` v1.14.45
 
-### Operation Modes
+### Design Decision: Pure Go Cosine Similarity (No sqlite-vec C Extension)
+Vectors stored as BLOBs (40 × 4 bytes = 160 bytes). Cosine similarity computed in pure Go. The `viant/sqlite-vec` (pure Go virtual table) was considered but deemed too complex for Phase 2 (full MySQL replication architecture). For 4M tracks, brute-force scan is acceptable for top-K queries on modern hardware. sqlite-vec index can be added later for performance optimization.
 
-| Mode | Command | Use Case |
-|---|---|---|
-| TUI (default) | `go run ./cmd/tui` | Interactive development, manual operation |
-| Headless | `go run ./cmd/tui --headless` | CI, e2e testing, background server |
-
-## Known Blockers
-
-1. **sqlite-vec Go bindings**: Need to verify `asg017/sqlite-vec-go-bindings` works on macOS arm64 with vec0 virtual table.
-
-2. **go-mfcc library**: Need to verify output compatibility with librosa's MFCC. If large discrepancies, may need custom implementation.
-
-3. **IA Scraping API stability**: Need to test `/services/search/v1/scrape` with music collection queries.
-
-4. **beep/v2 MP3 streaming**: Need to verify `beep/v2/mp3` can decode from a non-seekable `io.Reader` (HTTP response body) for playback. May need to buffer in memory.
-
-5. **SQLite WAL + concurrent goroutines**: Need connection strategy (mutex-protected writes, or single writer goroutine).
-
-## Architectural Decisions (17 total)
-
-| # | Decision | Status |
-|---|---|---|
-| D1 | Go language | Final |
-| D2 | SQLite + sqlite-vec (local) | Final |
-| D3 | Cursor-based Scraping API | Final |
-| D4 | 20 MFCC bands → 40-dim vector, 30s | Final |
-| D5 | SNR quality score from PCM | Final |
-| D6 | Coordinator/Worker decoupled goroutines | Final |
-| D7 | TUI orchestration (was: shell scripts) | Final |
-| D8 | Goroutine pool, configurable concurrency | Final |
-| D9 | 1.6 MB HTTP Range request | Final |
-| D10 | Future: Turso/libSQL + colima/incus | Design only |
-| D11 | Single binary, TUI + headless modes | Final |
-| D12 | Bubble Tea TUI framework | Final |
-| D13 | Goroutines (not subprocesses) | Final |
-| D14 | gopxl/beep/v2 for audio playback | Final |
-| D15 | Event channels (TUI ↔ goroutines) | Final |
-| D16 | Per-phase exit criteria (TUI-runnable) | Final |
-| D17 | JSON-structured stdout in headless mode | Final |
-
-## Database Schema (Designed, Not Implemented)
-
-- `catalog_queue` — Queue state machine (pending/processing/completed/failed)
-- `track_embeddings` — Vector embeddings via sqlite-vec `vec0`
-- `cursor_state` — Coordinator resume state
-
-## Go Dependencies (Identified, Not Added)
-
-| Package | Purpose |
-|---|---|
-| `charm.land/bubbletea/v2` | TUI framework |
-| `charm.land/bubbles/v2` | TUI components |
-| `charm.land/lipgloss/v2` | Terminal styling |
-| `github.com/mattn/go-sqlite3` | SQLite driver |
-| `github.com/asg017/sqlite-vec-go-bindings` | sqlite-vec |
-| `github.com/hajimehoshi/go-mp3` | MP3 decoder |
-| `github.com/zrma/go-mfcc` | MFCC extraction |
-| `github.com/gopxl/beep/v2` | Audio playback |
-| `github.com/gopxl/beep/v2/mp3` | MP3 beep decoder |
-| `github.com/gopxl/beep/v2/speaker` | Audio output |
-| `golang.org/x/time/rate` | Rate limiting |
-
-## Files on Disk
-
+### Tests
 ```
-parso-ia-music-indexer/
-├── .git/
-├── AGENTS.md
-├── chat-session.txt
-├── go.mod
-└── plans/
-    └── ia-music-indexer/
-        └── 2026-06-16/
-            ├── 00-overview.md       ← UPDATED (Rev 2)
-            ├── architecture.md      ← UPDATED (Rev 2 — TUI-based)
-            ├── data-model.md        ← (unchanged from Rev 1)
-            ├── implementation.md    ← UPDATED (Rev 2 — 7 phases + exit criteria)
-            ├── testing.md           ← UPDATED (Rev 2 — +e2e suite)
-            ├── decisions.md         ← UPDATED (Rev 2 — 17 decisions)
-            └── current_state.md     ← UPDATED (this file)
+ok  github.com/johnarleyburns/parso-ia-music-indexer/internal/db  1.681s
 ```
+
+10 tests passing:
+- `TestOpenMigrate` — DB opens, schema created, migration idempotent
+- `TestGetStatsEmpty` — Empty DB returns correct zeros
+- `TestBulkInsertPending` — Bulk insert with INSERT OR IGNORE dedup
+- `TestClaimAndComplete` — Optimistic locking, status transitions
+- `TestMarkFailed` — Error message saved, retry count incremented
+- `TestResetStuckJobs` — Stuck processing jobs reset to pending
+- `TestEmbeddingRoundtrip` — F32 encode/decode roundtrip
+- `TestQuerySimilar` — Identical vectors → dist 0; opposite vectors → dist ~2
+- `TestCosDistanceSelf` — Self-distance = 0
+- `TestCosDistanceOrthogonal` — Orthogonal vectors → dist ~1
+
+## Database Schema (Implemented)
+
+- `catalog_queue` — Queue state machine (pending/processing/completed/failed) with retry_count, error_message
+- `track_embeddings` — Vector embeddings as BLOBs (40×float32) with quality_score
+- `cursor_state` — Coordinator resume state (singleton row)
+
+## Known Blockers (Updated)
+
+1. ~~sqlite-vec Go bindings~~ — **Resolved**: Using pure Go cosine similarity with BLOB storage. sqlite-vec deferred to later.
+2. **go-mfcc library** — Need to verify output compatibility with librosa's MFCC.
+3. **IA Scraping API stability** — Need to test endpoint with music collection queries.
+4. **beep/v2 MP3 streaming** — Need to verify capability with non-seekable io.Reader.
+5. **SQLite WAL + concurrent goroutines** — Currently `SetMaxOpenConns(1)`; will need mutex for worker writes in Phase 5.
 
 ## Next Action
 
-**Ready to begin Phase 1 implementation.**
-
-Phase 1 deliverables:
-1. `cmd/tui/main.go` — entry point with `--headless` flag
-2. `internal/tui/` — main model, tab bar, placeholder tab views, styles
-3. `internal/config/` — configuration from env vars + flags
-4. Exit criteria: TUI launches, 4 tabs visible and switchable, `q` quits, `--headless` prints message and exits
+**Ready for Phase 3 — Dashboard Tab: Live Stats & Controls.**
