@@ -1,0 +1,47 @@
+package config
+
+import (
+	"flag"
+	"fmt"
+	"os"
+)
+
+type Config struct {
+	DBPath    string
+	Headless  bool
+	Workers   int
+	MaxBytes  int
+	ThrottleBPS int
+	IAApiRate int
+}
+
+func Parse() *Config {
+	cfg := &Config{}
+
+	flag.StringVar(&cfg.DBPath, "db-path", envOrDefault("DB_PATH", "data/parso_indexer.db"), "SQLite database path")
+	flag.BoolVar(&cfg.Headless, "headless", false, "Run in headless mode (JSON logging, no TUI)")
+	flag.IntVar(&cfg.Workers, "workers", envOrDefaultInt("WORKER_CONCURRENCY", 2), "Number of worker goroutines")
+	flag.IntVar(&cfg.MaxBytes, "max-stream-bytes", envOrDefaultInt("MAX_STREAM_BYTES", 1600000), "Max bytes to stream per track (~30s MP3)")
+	flag.IntVar(&cfg.ThrottleBPS, "throttle-bps", envOrDefaultInt("THROTTLE_BPS", 460800), "Download throttle in bytes/sec (450 KB/s)")
+	flag.IntVar(&cfg.IAApiRate, "ia-api-rate", envOrDefaultInt("IA_API_RATE", 15), "IA API requests per minute")
+	flag.Parse()
+
+	return cfg
+}
+
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func envOrDefaultInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		var n int
+		if _, err := fmt.Sscanf(v, "%d", &n); err == nil {
+			return n
+		}
+	}
+	return def
+}
