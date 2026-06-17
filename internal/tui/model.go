@@ -57,6 +57,11 @@ type MainModel struct {
 
 	DB *sql.DB
 
+	Events   chan ActivityEvent
+	Controls chan ControlCmd
+
+	ArtCache *ArtCache
+
 	Dashboard DashboardModel
 	LiveLog   LiveLogModel
 	Browse    BrowseModel
@@ -70,41 +75,109 @@ type MainModel struct {
 	Ready  bool
 }
 
-func NewMainModel(cfg *config.Config, sqlDB *sql.DB) MainModel {
+func NewMainModel(cfg *config.Config, sqlDB *sql.DB, events chan ActivityEvent, controls chan ControlCmd, artCache *ArtCache) MainModel {
 	return MainModel{
 		Config:    cfg,
 		Tabs:      []string{"Dashboard", "Live Log", "Browse", "Player"},
 		ActiveTab: 0,
 		DB:        sqlDB,
+		Events:    events,
+		Controls:  controls,
+		ArtCache:  artCache,
 		Dashboard: NewDashboardModel(sqlDB),
 		LiveLog:   NewLiveLogModel(),
-		Browse:    NewBrowseModel(),
-		Player:    NewPlayerModel(),
+		Browse:    NewBrowseModel(sqlDB, artCache),
+		Player:    NewPlayerModel(sqlDB),
 		Help:      help.New(),
 		Keys:      keys,
 	}
 }
 
 func (m MainModel) Init() tea.Cmd {
-	return m.Dashboard.Init()
+	return tea.Batch(
+		m.Dashboard.Init(),
+		waitForActivityEvent(m.Events),
+	)
+}
+
+func waitForActivityEvent(ch <-chan ActivityEvent) tea.Cmd {
+	return func() tea.Msg {
+		event, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return event
+	}
 }
 
 func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		switch {
-		case key.Matches(msg, m.Keys.Quit):
+		browseInputActive := m.ActiveTab == 2 && m.Browse.InputFocused()
+
+		if key.Matches(msg, m.Keys.Quit) && msg.String() == "ctrl+c" {
+			m.Player.engine.Close()
+			m.Controls <- ControlCmd{Action: CmdShutdown}
 			return m, tea.Quit
-		case key.Matches(msg, m.Keys.NextTab):
-			m.ActiveTab = (m.ActiveTab + 1) % len(m.Tabs)
-			return m, nil
-		case key.Matches(msg, m.Keys.PrevTab):
-			m.ActiveTab = (m.ActiveTab - 1 + len(m.Tabs)) % len(m.Tabs)
-			return m, nil
-		case key.Matches(msg, m.Keys.Help):
-			m.Help.ShowAll = !m.Help.ShowAll
-			return m, nil
 		}
+
+		if !browseInputActive {
+			switch {
+			case key.Matches(msg, m.Keys.Quit):
+				m.Player.engine.Close()
+				m.Controls <- ControlCmd{Action: CmdShutdown}
+				return m, tea.Quit
+			case key.Matches(msg, m.Keys.Help):
+				m.Help.ShowAll = !m.Help.ShowAll
+				return m, nil
+			}
+		}
+
+		switch {
+		case key.Matches(msg, m.Keys.NextTab):
+			prevTab := m.ActiveTab
+			m.ActiveTab = (m.ActiveTab + 1) % len(m.Tabs)
+			return m, m.onTabSwitch(prevTab, m.ActiveTab)
+		case key.Matches(msg, m.Keys.PrevTab):
+			prevTab := m.ActiveTab
+			m.ActiveTab = (m.ActiveTab - 1 + len(m.Tabs)) % len(m.Tabs)
+			return m, m.onTabSwitch(prevTab, m.ActiveTab)
+		}
+
+		if m.ActiveTab == 0 {
+			switch msg.String() {
+			case "s":
+				m.Controls <- ControlCmd{Action: CmdStartCoordinator}
+				return m, nil
+			case "x":
+				m.Controls <- ControlCmd{Action: CmdStopCoordinator}
+				return m, nil
+			case "r":
+				m.Controls <- ControlCmd{Action: CmdAddResolver}
+				return m, nil
+			case "R":
+				m.Controls <- ControlCmd{Action: CmdRemoveResolver}
+				return m, nil
+			case "w":
+				m.Controls <- ControlCmd{Action: CmdAddWorker}
+				return m, nil
+			case "W":
+				m.Controls <- ControlCmd{Action: CmdRemoveWorker}
+				return m, nil
+			}
+		}
+
+	case SwitchToPlayerMsg:
+		m.ActiveTab = 3
+		var cmd tea.Cmd
+		m.Player, cmd = m.Player.Update(msg)
+		return m, cmd
+
+	case ActivityEvent:
+		var cmd1, cmd2 tea.Cmd
+		m.Dashboard, cmd1 = m.Dashboard.Update(msg)
+		m.LiveLog, cmd2 = m.LiveLog.Update(msg)
+		return m, tea.Batch(waitForActivityEvent(m.Events), cmd1, cmd2)
 
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
@@ -122,6 +195,16 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statsRefreshMsg:
 		var cmd tea.Cmd
 		m.Dashboard, cmd = m.Dashboard.Update(msg)
+		return m, cmd
+
+	case browseSearchMsg, browseSimilarMsg, browseAlbumSearchMsg, browseAlbumDetailMsg, artLoadedMsg:
+		var cmd tea.Cmd
+		m.Browse, cmd = m.Browse.Update(msg)
+		return m, cmd
+
+	case playerLoadedMsg, playerErrorMsg, playerTickMsg, playerDoneMsg:
+		var cmd tea.Cmd
+		m.Player, cmd = m.Player.Update(msg)
 		return m, cmd
 	}
 
@@ -182,4 +265,18 @@ func (m MainModel) View() tea.View {
 	v.WindowTitle = fmt.Sprintf("timbre — %s", m.Tabs[m.ActiveTab])
 	v.AltScreen = true
 	return v
+}
+
+func (m *MainModel) onTabSwitch(from, to int) tea.Cmd {
+	if to == 2 {
+		var cmd tea.Cmd
+		m.Browse, cmd = m.Browse.Activate()
+		return cmd
+	}
+	if from == 2 {
+		m.Browse.searchInput.Blur()
+		m.Browse.table.Blur()
+		m.Browse.inputFocused = false
+	}
+	return nil
 }

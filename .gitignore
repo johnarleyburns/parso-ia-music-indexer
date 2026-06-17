@@ -1,4 +1,6 @@
 bin/
+/tui
 data/*.db
 data/*.db-wal
 data/*.db-shm
+data/art/

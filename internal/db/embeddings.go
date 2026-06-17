@@ -8,35 +8,42 @@ import (
 )
 
 type SimilarTrack struct {
-	Identifier   string
+	TrackID      int
+	Title        string
+	AlbumID      string
 	QualityScore float64
 	Distance     float64
 }
 
 type candidate struct {
-	id      string
+	trackID int
+	title   string
+	albumID string
 	quality float64
 	dist    float64
 }
 
-func SaveEmbedding(db *sql.DB, identifier string, embedding []float32, qualityScore float64) error {
+func SaveEmbedding(db *sql.DB, trackID int, embedding []float32, qualityScore float64) error {
 	blob := encodeF32(embedding)
 	_, err := db.Exec(
-		`INSERT OR REPLACE INTO track_embeddings(ia_identifier, embedding, quality_score) VALUES(?, ?, ?)`,
-		identifier, blob, qualityScore,
+		`INSERT OR REPLACE INTO track_embeddings(track_id, embedding, quality_score) VALUES(?, ?, ?)`,
+		trackID, blob, qualityScore,
 	)
 	return err
 }
 
-func QuerySimilar(db *sql.DB, identifier string, limit int) ([]SimilarTrack, error) {
+func QuerySimilar(db *sql.DB, trackID int, limit int) ([]SimilarTrack, error) {
 	var queryBlob []byte
-	err := db.QueryRow(`SELECT embedding FROM track_embeddings WHERE ia_identifier = ?`, identifier).Scan(&queryBlob)
+	err := db.QueryRow(`SELECT embedding FROM track_embeddings WHERE track_id = ?`, trackID).Scan(&queryBlob)
 	if err != nil {
 		return nil, fmt.Errorf("query embedding: %w", err)
 	}
 	queryVec := decodeF32(queryBlob)
 
-	rows, err := db.Query(`SELECT ia_identifier, embedding, quality_score FROM track_embeddings WHERE ia_identifier != ?`, identifier)
+	rows, err := db.Query(`SELECT e.track_id, COALESCE(t.title, t.filename), t.album_id, e.embedding, e.quality_score
+		FROM track_embeddings e
+		INNER JOIN tracks t ON e.track_id = t.id
+		WHERE e.track_id != ?`, trackID)
 	if err != nil {
 		return nil, fmt.Errorf("select all: %w", err)
 	}
@@ -45,18 +52,17 @@ func QuerySimilar(db *sql.DB, identifier string, limit int) ([]SimilarTrack, err
 	var candidates []candidate
 
 	for rows.Next() {
-		var id string
+		var c candidate
 		var blob []byte
-		var qs float64
-		if err := rows.Scan(&id, &blob, &qs); err != nil {
+		if err := rows.Scan(&c.trackID, &c.title, &c.albumID, &blob, &c.quality); err != nil {
 			return nil, err
 		}
 		vec := decodeF32(blob)
 		if len(vec) != len(queryVec) {
 			continue
 		}
-		dist := cosineDistance(queryVec, vec)
-		candidates = append(candidates, candidate{id: id, quality: qs, dist: dist})
+		c.dist = cosineDistance(queryVec, vec)
+		candidates = append(candidates, c)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -71,7 +77,9 @@ func QuerySimilar(db *sql.DB, identifier string, limit int) ([]SimilarTrack, err
 	result := make([]SimilarTrack, limit)
 	for i := 0; i < limit; i++ {
 		result[i] = SimilarTrack{
-			Identifier:   candidates[i].id,
+			TrackID:      candidates[i].trackID,
+			Title:        candidates[i].title,
+			AlbumID:      candidates[i].albumID,
 			QualityScore: candidates[i].quality,
 			Distance:     candidates[i].dist,
 		}
@@ -85,10 +93,10 @@ func GetEmbeddingCount(db *sql.DB) (int, error) {
 	return count, err
 }
 
-func GetEmbedding(db *sql.DB, identifier string) ([]float32, float64, error) {
+func GetEmbedding(db *sql.DB, trackID int) ([]float32, float64, error) {
 	var blob []byte
 	var qs float64
-	err := db.QueryRow(`SELECT embedding, quality_score FROM track_embeddings WHERE ia_identifier = ?`, identifier).Scan(&blob, &qs)
+	err := db.QueryRow(`SELECT embedding, quality_score FROM track_embeddings WHERE track_id = ?`, trackID).Scan(&blob, &qs)
 	if err != nil {
 		return nil, 0, err
 	}

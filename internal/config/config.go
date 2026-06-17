@@ -7,12 +7,14 @@ import (
 )
 
 type Config struct {
-	DBPath    string
-	Headless  bool
-	Workers   int
-	MaxBytes  int
+	DBPath      string
+	Headless    bool
+	Workers     int
+	MaxBytes    int
 	ThrottleBPS int
-	IAApiRate int
+	IAApiRate   int
+	ClapHost    string
+	ClapPort    int
 }
 
 func Parse() *Config {
@@ -24,6 +26,8 @@ func Parse() *Config {
 	flag.IntVar(&cfg.MaxBytes, "max-stream-bytes", envOrDefaultInt("MAX_STREAM_BYTES", 1600000), "Max bytes to stream per track (~30s MP3)")
 	flag.IntVar(&cfg.ThrottleBPS, "throttle-bps", envOrDefaultInt("THROTTLE_BPS", 460800), "Download throttle in bytes/sec (450 KB/s)")
 	flag.IntVar(&cfg.IAApiRate, "ia-api-rate", envOrDefaultInt("IA_API_RATE", 15), "IA API requests per minute")
+	flag.StringVar(&cfg.ClapHost, "clap-host", envOrDefault("CLAP_HOST", "localhost"), "CLAP gRPC server host")
+	flag.IntVar(&cfg.ClapPort, "clap-port", envOrDefaultInt("CLAP_PORT", 50051), "CLAP gRPC server port")
 	flag.Parse()
 
 	return cfg

@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package clap;
+
+option go_package = "./clap_proto";
+
+// CLAPEmbedder defines the gRPC contract between the Go orchestrator
+// and the Python neural inference sidecar.
+service CLAPEmbedder {
+  // GetEmbedding receives raw PCM audio samples and returns a 512-dim
+  // semantic embedding vector from the LAION-CLAP model.
+  rpc GetEmbedding (EmbeddingRequest) returns (EmbeddingResponse);
+}
+
+message EmbeddingRequest {
+  // Raw float32 PCM audio bytes, flat-packed in little-endian.
+  bytes pcm_data = 1;
+  // Sample rate of the audio. LAION-CLAP strictly requires 48000 Hz.
+  int32 sample_rate = 2;
+}
+
+message EmbeddingResponse {
+  // 512-dimensional semantic embedding vector.
+  repeated float embedding = 1;
+}

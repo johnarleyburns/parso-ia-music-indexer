@@ -1,5 +1,8 @@
 # Implementation Plan (Revision 2 — TUI-Based, Scriptless)
 
+**STATUS**: Phases 1–6 COMPLETE. Phase PX (per-track model, three-tier pipeline) COMPLETE. Phase 7 PENDING.
+**NOTE**: This document describes the original phase plan. The pipeline architecture has been significantly restructured by Phase PX. See `architecture.md` (Revision 3), `data-model.md` (Revision 2), and `phase-px-per-track.md` for current architecture. Key changes: `catalog_queue` replaced by `albums → tracks → track_embeddings`; two-pool model replaced by three-tier pipeline (coordinator + resolvers + analyzers).
+
 ## Problem
 
 Build the local-first audio indexing pipeline as a single Go binary with a Bubble Tea TUI (default) or headless mode (`--headless`). Each phase must be independently testable from within the TUI before proceeding to the next phase.
@@ -112,6 +115,73 @@ github.com/asg017/sqlite-vec-go-bindings
 
 ---
 
+## Phase 2B — Hybrid Recommendation Engine Core
+
+**Goal**: Implement the core computation engines: three vector extractors (MFCC, Chroma, CLAP gRPC client), a multi-metric quality scoring gatekeeper (SNR + Spectral Centroid + Crest Factor), and the late fusion engine that combines vectors into a 564-dim hybrid embedding. Everything is testable with unit tests. The database already supports arbitrary-length vectors via BLOB storage — no schema migration needed.
+
+Full details: see `02b-hybrid-engine.md`.
+
+### Files to Create
+
+```
+internal/audio/types.go          # Shared audio types (PCMFormat, FeatureResult, QualityScore)
+internal/audio/decode.go         # WAV decoder for test fixtures
+internal/audio/mfcc.go           # MFCC extraction → 40-dim vector (20 mean + 20 variance)
+internal/audio/chroma.go         # Chroma extraction → 12-dim vector (12 semitones)
+internal/audio/quality.go        # Quality scoring: SNR, Spectral Centroid, Crest Factor → 0.0–1.0
+internal/hybrid/fusion.go        # FuseFeatures() — weighted concatenation → 564-dim
+internal/hybrid/fusion_test.go   # Unit tests for fusion engine
+internal/clap/client.go          # CLAPClient interface + mock + gRPC implementation
+proto/clap.proto                 # gRPC service + message definitions
+python_sidecar/server.py         # Python CLAP inference server (standalone)
+python_sidecar/requirements.txt  # Python dependencies
+```
+
+### Files to Modify
+
+```
+internal/db/db_test.go           # Add 564-dim embedding roundtrip + similarity tests
+internal/config/config.go        # Add ClapHost, ClapPort fields
+go.mod                           # Add gRPC, proto, go-dsp, go-mfcc, go-audio deps
+```
+
+### Dependencies to Add
+
+```
+google.golang.org/grpc
+google.golang.org/protobuf
+github.com/mjibson/go-dsp
+github.com/zrma/go-mfcc
+github.com/go-audio/audio
+github.com/go-audio/wav
+```
+
+### Key Implementation Details
+
+- `internal/audio/mfcc.go`: `ComputeMFCCPool(samples []float32, sampleRate int) []float32` — uses go-mfcc, 20 bands, returns 40-dim (mean 0..19, variance 20..39).
+- `internal/audio/chroma.go`: `ComputeChromaPool(samples []float32) []float32` — FFT → frequency→MIDI mapping → 12-bin pitch histogram → 12-dim vector.
+- `internal/audio/quality.go`: Three raw metric functions — `CalculateSNR(samples) → dB`, `CalculateSpectralCentroid(samples, sampleRate) → Hz`, `CalculateCrestFactor(samples) → ratio`. Composite: `CalculateCompositeScore(snr, centroid, crest) → 0.0–1.0`. Weights: SNR 0.50, Centroid 0.30, Crest 0.20. Kill switch: SNR < 10 dB → 0.0. Normalization: min-max clamping with fixed reference ranges.
+- `internal/audio/decode.go`: `DecodeWav(filePath string) ([]float32, error)` — for test fixtures only.
+- `internal/hybrid/fusion.go`: `FuseFeatures(clap, mfcc, chroma []float32) []float32` — applies weights (0.60, 0.25, 0.15), concatenates → 564-dim.
+- `internal/clap/client.go`: `CLAPClient` interface with `GetEmbedding()`, `HealthCheck()`, `Close()`. `NewGRPCClient(host, port)` for real gRPC, `NewMockClient()` for testing.
+- `proto/clap.proto`: `CLAPEmbedder` service with `GetEmbedding` RPC. `EmbeddingRequest` (pcm_data bytes, sample_rate int32), `EmbeddingResponse` (repeated float embedding).
+- `python_sidecar/server.py`: HuggingFace `laion/clap-htsat-fused`, MPS/CUDA/CPU, gRPC on port 50051.
+- `internal/config/config.go`: Add `ClapHost` (env `CLAP_HOST`, default `localhost`) and `ClapPort` (env `CLAP_PORT`, default `50051`).
+- DB: Existing BLOB storage + pure Go cosine distance in `embeddings.go` already handles 564-dim. No code changes to `embeddings.go` or `db.go` needed.
+
+### Exit Criteria
+
+1. `go test ./internal/audio/...` — MFCC, Chroma, and Quality scoring extractors produce correct output
+2. `go test ./internal/hybrid/...` — Fusion produces correct 564-dim output with weights
+3. `go test ./internal/clap/...` — Mock client works; gRPC client struct compiles
+4. `go test ./internal/db/...` — Existing 10 tests pass + new 564-dim tests pass
+5. `go build ./cmd/tui` compiles without errors
+6. `proto/clap.proto` is complete with documented generation commands
+7. `python_sidecar/server.py` is present and well-documented (manual launch optional at this phase)
+8. Quality scoring: sine wave > 0.7, white noise < 0.3, SNR < 10 dB kill switch triggers
+
+---
+
 ## Phase 3 — Dashboard Tab: Live Stats & Controls
 
 **Goal**: Dashboard shows live-updating stats, coordinator/worker controls (start/stop with simulated behavior), and activity feed.
@@ -211,18 +281,16 @@ internal/db/queue.go           # Add BulkInsert(identifiers []string) method
 
 ---
 
-## Phase 5 — Audio Analysis Pipeline + Real Worker Pool
+## Phase 5 — Audio Analysis Pipeline + Real Worker Pool (Hybrid)
 
-**Goal**: Workers stream, analyze, and embed real IA audio tracks. Progress visible in Dashboard.
+**Goal**: Workers stream real IA audio, decode to PCM, run quality gate (skip unusable tracks), extract all three feature vectors (MFCC, Chroma, CLAP), fuse into a 564-dim hybrid vector, and store in DB. Progress visible in Dashboard.
 
 ### Files to Create
 
 ```
 internal/audio/stream.go            # HTTP Range download with throttling
-internal/audio/decode.go            # MP3 → PCM samples via go-mp3
-internal/audio/mfcc.go              # 20 MFCC bands → 40-dim vector (mean+variance)
-internal/audio/snr.go               # Signal-to-Noise Ratio from PCM samples
-internal/audio/types.go             # AnalysisResult struct
+internal/audio/mp3decode.go         # MP3 → PCM samples via go-mp3
+internal/audio/types.go             # (MODIFIED: AnalysisResult includes hybrid vector + quality)
 internal/rate/throttled_reader.go   # io.Reader wrapper: 450 KB/s limit
 ```
 
@@ -232,7 +300,7 @@ internal/rate/throttled_reader.go   # io.Reader wrapper: 450 KB/s limit
 internal/tui/dashboard.go           # Wire real worker start/stop; per-worker progress bars
 internal/tui/events.go              # Add AnalysisStarted, AnalysisComplete, AnalysisFailed events
 cmd/tui/main.go                     # Wire real worker goroutines (replaces stubs)
-internal/db/embeddings.go           # Full SaveEmbedding implementation
+internal/db/embeddings.go           # (No change needed — already handles 564-dim BLOBs)
 internal/ia/client.go               # Add LookupMP3URL(identifier) method
 ```
 
@@ -240,35 +308,40 @@ internal/ia/client.go               # Add LookupMP3URL(identifier) method
 
 ```
 github.com/hajimehoshi/go-mp3
-github.com/zrma/go-mfcc
+github.com/zrma/go-mfcc              # (Already added in Phase 2B)
 golang.org/x/time/rate
 ```
 
 ### Key Implementation Details
 
-- `internal/audio/stream.go`: `StreamAudioChunk(ctx, mp3URL string, maxBytes int) ([]byte, error)` — creates GET request with `Range: bytes=0-{maxBytes}` header, wraps response body in `ThrottledReader(450 KB/s)`, reads up to maxBytes into `[]byte`, returns buffer.
-- `internal/audio/decode.go`: `DecodeMP3(data []byte) ([]float64, int, error)` — uses `go-mp3` to decode MP3 bytes→PCM samples (16-bit→float64 normalized to [-1,1]), returns samples + sample rate.
-- `internal/audio/mfcc.go`: `ExtractMFCC(samples []float64, sampleRate int) ([]float32, error)` — passes samples to `go-mfcc` configured for 20 bands, default frame size. Iterates over resulting MFCC frames (2D: bands × time). For each band: computes mean and variance across all time frames. Returns flat 40-dim `[]float32`.
-- `internal/audio/snr.go`: `CalculateSNR(samples []float64) float64` — splits signal into frames. For each frame computes RMS energy. Sorts frames by energy. Signal power = mean of top 90% frames. Noise floor = mean of bottom 10% frames. Returns `10 * log10(signal_power / noise_floor)` dB.
-- `internal/ia/client.go`: `LookupMP3URL(ctx, identifier string) (string, error)` — hits `https://archive.org/metadata/{identifier}` JSON endpoint, parses `files` array, finds first `.mp3` derivative, returns URL.
-- `internal/db/embeddings.go`: `SaveEmbedding(db, identifier, embedding []float32, qualityScore float64) error` — INSERT INTO track_embeddings.
-- `internal/rate/throttled_reader.go`: Wraps `io.Reader`, rate-limits to 450 KB/s (460800 B/s) using `rate.Limiter`.
-- Worker goroutine: Loop — `ClaimNextBatch(db, workerID, batchSize)` → for each identifier: `LookupMP3URL` → `StreamAudioChunk` → `DecodeMP3` → `ExtractMFCC` → `CalculateSNR` → `SaveEmbedding` → `MarkCompleted`. On failure at any step: `MarkFailed(identifier, errorMessage)`. After batch: check for stop signal. Send `EventAnalysisStarted` / `EventAnalysisComplete` / `EventAnalysisFailed` events.
+- Worker goroutine pipeline (MODIFIED from original Phase 5):
+  1. `ClaimNextBatch(db, workerID, batchSize)` (unchanged)
+  2. For each identifier:
+     a. `LookupMP3URL` → HTTP Range download → PCM samples (unchanged)
+     b. **Quality gate**: `CalculateSNR` + `CalculateSpectralCentroid` + `CalculateCrestFactor` → `CalculateCompositeScore` (uses engine from Phase 2B)
+        - If composite < 0.3: `MarkFailed(identifier, "low quality: score=X.XX")`, skip remainder
+        - If composite >= 0.3: continue
+     c. `ComputeMFCCPool(samples, sampleRate)` → 40-dim MFCC (uses engine from Phase 2B)
+     d. `ComputeChromaPool(samples)` → 12-dim Chroma (uses engine from Phase 2B)
+     e. `clapClient.GetEmbedding(ctx, pcmBytes, sampleRate)` → 512-dim CLAP (uses engine from Phase 2B)
+     f. `FuseFeatures(clap, mfcc, chroma)` → 564-dim hybrid vector (uses fusion from Phase 2B)
+     g. `SaveEmbedding(db, identifier, hybridVector, qualityScore)` (uses existing DB layer)
+     h. `MarkCompleted(identifier)` (unchanged)
+  3. Send `EventAnalysisStarted` / `EventAnalysisComplete` / `EventAnalysisFailed` events
+
+- CLAP sidecar communication: Go worker calls gRPC client (built in Phase 2B). If sidecar is unreachable, worker uses mock CLAP client as fallback with degraded recommendation quality (configurable — `CLAP_FALLBACK_MOCK=true`).
+
+- Quality scoring is computed **before** CLAP (which is expensive), so unusable tracks are rejected early without wasting GPU time.
 
 ### Exit Criteria
 
-1. Coordinator running (queue populated) + `w` adds workers
-2. Workers process real tracks — Dashboard shows:
-   - Completed count incrementing in DB stats
-   - Per-worker panel showing: `Worker 1: analyzing etree:xyz... (24%) [progress bar]`
-   - Activity feed: `✓ etree:gd1977-05-08... (SNR 24.5 dB)` — green
-3. Failed tracks show: `✗ georgeblood:abc... (error: no MP3 derivative)` — red, with error message
-4. `ResetStuckJobs` recovers stuck tracks:
-   - Kill app while worker was `processing`
-   - Restart app, open DB stats → Processing count drops, Pending count rises (stuck jobs reset)
-5. Progress bars update smoothly (not jumpy)
-6. `go run ./cmd/tui --headless --workers 2` processes tracks headlessly, logs JSON events including `analysis_complete` with SNR values
-7. Run for 5+ completed tracks, verify `sqlite3 data/parso_indexer.db "SELECT ia_identifier, quality_score FROM track_embeddings LIMIT 5"` returns sensible data
+Same as original Phase 5 exit criteria, plus:
+- Verified: hybrid vectors stored are 564-dimensional
+- Verified: similarity search on hybrid vectors returns meaningful results
+- Verified: MFCC + Chroma extraction happen locally (no Python dependency for these)
+- Verified: CLAP extraction succeeds when Python sidecar is running; falls back to mock when not
+- Verified: low-quality tracks (composite < 0.3) are marked as failed with "low quality" error; high-quality tracks proceed normally
+- Verified: SNR < 10 dB kill switch marks tracks as failed regardless of other metrics
 
 ---
 
@@ -396,11 +469,13 @@ github.com/gopxl/beep/v2/speaker
 
 ## Implementation Rules
 
-1. **All code in Go** — no Python, no CGo unless absolutely necessary (sqlite-vec may require it)
+1. **All code in Go** — no Python, no CGo unless absolutely necessary
 2. **No shell scripts** — the TUI replaces all orchestration
 3. **No external services** — SQLite lives in `data/`, runs entirely local
-4. **Configuration via env vars** — `DB_PATH`, `WORKER_CONCURRENCY`, `MAX_STREAM_BYTES`, `THROTTLE_BPS`, `IA_API_RATE`
+4. **Configuration via env vars** — `DB_PATH`, `WORKER_CONCURRENCY`, `MAX_STREAM_BYTES`, `THROTTLE_BPS`, `IA_API_RATE`, `CLAP_HOST`, `CLAP_PORT`
 5. **Graceful shutdown** — SIGINT/SIGTERM releases queue locks, saves cursor, stops audio
 6. **Idempotent** — safe to restart at any time
 7. **Headless parity** — every feature works identically in `--headless` mode (just without terminal UI)
 8. **Phase gate** — do NOT start phase N+1 until user has confirmed phase N's exit criteria are met in the TUI
+9. **Binary first** — always build via `make build` and run tests before asking the user to verify. Never say `go run`.
+10. **Binary is deliverable** — `bin/timbre` is the single binary; the user runs `./bin/timbre`, never `go run ./cmd/tui`.

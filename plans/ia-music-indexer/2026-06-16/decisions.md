@@ -1,4 +1,4 @@
-# Design Decisions (Revision 2)
+# Design Decisions (Revision 3)
 
 ## Decision 1: Language — Go vs Python
 
@@ -10,13 +10,13 @@
 
 ---
 
-## Decision 2: Database — SQLite + sqlite-vec vs PostgreSQL + pgvector
+## Decision 2: Database — SQLite with BLOB Vectors
 
-**Decision**: SQLite + sqlite-vec for local; Turso/libSQL for distributed (future)
+**Decision**: SQLite with BLOB-encoded float32 vectors and pure Go cosine similarity. No sqlite-vec extension.
 
-**Rationale**: Zero setup, single file, perfect for laptop-first development. ~1 GB total size fits easily. Migration path to Turso/libSQL is wire-compatible.
+**Rationale**: Zero setup, single file. BLOB storage supports arbitrary-dimension vectors (40-dim, 564-dim, future changes). Pure Go cosine distance avoids CGo dependency for vector search. Sufficient performance for brute-force search up to ~1M vectors.
 
-**Tradeoff**: Newer library, limited concurrent write throughput. Acceptable for Phase 1.
+**Tradeoff**: O(N) similarity search. Acceptable for current scale. ANN indexing can be added later if needed.
 
 ---
 
@@ -36,27 +36,26 @@
 
 **Rationale**: Industry standard for MIR. 30s captures enough for genre/timbre. Mean+variance captures central tendency and dynamic range. 40 dimensions is compact for fast similarity search.
 
-**Tradeoff**: May miss long intros or classical pieces where first 30s is ambient. Configurable offset in future.
+---
+
+## Decision 5: Quality Score — Multi-Metric Composite
+
+**Decision**: Composite 0.0–1.0 quality score from SNR (0.50), Spectral Centroid (0.30), Crest Factor (0.20) with SNR < 10 dB kill switch.
+
+**Rationale**: See Decision 19 for full rationale. Single SNR is insufficient for the diversity of IA audio sources.
 
 ---
 
-## Decision 5: Quality Score — SNR from PCM
+## Decision 6: Pipeline Architecture — Three-Tier (Coordinator + Resolvers + Analyzers)
 
-**Decision**: Signal-to-Noise Ratio from raw PCM samples (dB scale)
+**Decision**: Three-tier pipeline with independently scalable pools:
+- Tier 1: Coordinator (singleton) — IA search API scraping → albums
+- Tier 2: Album Resolvers (pool) — IA metadata API → tracks
+- Tier 3: Track Analyzers (pool) — audio download + ML features → embeddings
 
-**Rationale**: Directly measures recording cleanliness. No external metadata. 78rpm records naturally score low; modern recordings score high. Computationally cheap.
+**Rationale**: Each tier has different scaling characteristics. The coordinator is inherently sequential (cursor pagination). Resolvers are rate-limited by the metadata API (~15 req/min). Analyzers are CPU/network bound. Separate pools let the user balance resources across pipeline stages and observe backpressure (e.g., lots of pending tracks = add more analyzers).
 
-**Tradeoff**: Single dimension — doesn't capture dynamic range compression or stereo imaging. Sufficient for Phase 1.
-
----
-
-## Decision 6: Discovery vs Analysis — Decoupled Coordinator/Worker
-
-**Decision**: Separate coordinator (metadata discovery) from worker pool (audio analysis), both as goroutines within the same binary.
-
-**Rationale**: Coordinator is I/O bound (rate limited), benefits from single instance. Workers are bandwidth bound, benefit from N concurrent goroutines. Decoupling allows coordinator to populate queue independently. Enables clean distributed scale-out later.
-
-**Tradeoff**: Slightly more complex goroutine management. Worth it for architectural clarity.
+**Supersedes**: Original Decision 6 (two-pool coordinator/worker model).
 
 ---
 
@@ -64,19 +63,13 @@
 
 **Decision**: Single binary with Bubble Tea TUI as primary interface; headless mode for automation.
 
-**Rationale**: User requested "scriptless" design. TUI provides live progress, interactive controls, search, and playback in one tool. No shell scripts, no ad-hoc Go programs. Headless mode serves CI/e2e needs.
-
-**Tradeoff**: More complex initial build (TUI layer). Worth it for unified UX.
+**Rationale**: User requested "scriptless" design. TUI provides live progress, interactive controls, search, and playback in one tool.
 
 ---
 
-## Decision 8: Concurrency Model — Goroutine Pool
+## Decision 8: Concurrency Model — Goroutine Pools
 
-**Decision**: Worker uses goroutine pool with configurable concurrency (default 2, max configurable). Coordinator is a single goroutine.
-
-**Rationale**: Goroutines are lightweight. 2 concurrent downloads is safe against single-IP IA rate limits. User can increase for multiple IPs. Channel-based: queue batch → channel → worker goroutines → results → DB write (serialized via mutex).
-
-**Tradeoff**: Must ensure SQLite write serialization. Use mutex-protected write methods in `internal/db`.
+**Decision**: Three tiers use goroutine pools with user-controllable concurrency. Coordinator is singleton. Resolver pool (typically 2-3). Analyzer pool (typically 4-8). SQLite writes serialized via mutex.
 
 ---
 
@@ -84,57 +77,39 @@
 
 **Decision**: `Range: bytes=0-1600000` (~1.6 MB) default. Configurable via `MAX_STREAM_BYTES`.
 
-**Rationale**: 30s of MP3 at 128 kbps ≈ 480 KB; at 320 kbps ≈ 1.2 MB. 1.6 MB is generous margin. IA MP3s are typically 128–192 kbps. Configurable for tuning.
-
 ---
 
 ## Decision 10: Future Distribution Strategy
 
-**Decision**: Phase 1 = local SQLite; Phase 2 = Turso/libSQL + colima/incus deployment (future).
+**Decision**: Phase 1 = local SQLite; future = Turso/libSQL + container deployment.
 
-**Rationale**: SQLite is wire-compatible with libSQL/Turso. Same Go binary, connection string swap. Reference pattern exists at `../fast-internet-portal`.
-
-**Status**: Design only. Not implemented in Phase 1.
+**Status**: Not implemented.
 
 ---
 
 ## Decision 11: Single Binary, Two Modes (TUI + Headless)
 
-**Decision**: One `cmd/tui/main.go` entry point. `--headless` flag switches between interactive TUI and headless JSON-logging mode.
-
-**Rationale**: "Scriptless" means no separate coordinator/worker/search binaries. Single binary reduces build complexity and ensures internal packages are always tested together. Headless mode is essential for CI/e2e testing and future server deployment — same code paths, same logic, just different output.
-
-**Tradeoff**: Binary includes TUI dependencies even in headless mode. Acceptable — Go compiles unused imports out; bubbletea/lipgloss are not massive.
+**Decision**: One `cmd/tui/main.go` entry point. `--headless` flag switches between TUI and JSON-logging headless mode.
 
 ---
 
 ## Decision 12: Bubble Tea TUI Framework
 
-**Decision**: `charm.land/bubbletea/v2` with `bubbles/v2` and `lipgloss/v2`
-
-**Rationale**: Most popular Go TUI framework (43k+ GitHub stars). Elm Architecture (Model/Update/View) enforces clean state separation. Rich pre-built components (viewport, table, textinput, spinner, progress, help). Active ecosystem. Cross-platform terminal support.
-
-**Tradeoff**: Custom tab bar needed (no built-in tab component). Acceptable — Lip Gloss borders and styles handle this well. Learning curve for Elm Architecture pattern.
+**Decision**: `charm.land/bubbletea/v2` with `bubbles/v2` and `lipgloss/v2`.
 
 ---
 
 ## Decision 13: Coordinator/Workers as Goroutines, Not Subprocesses
 
-**Decision**: Coordinator and worker pool run as goroutines within the TUI binary, communicating via Go channels.
-
-**Rationale**: Same binary, same address space — no IPC overhead. Channels are idiomatic Go for goroutine communication. Channel-based event stream feeds directly into bubbletea's message loop. Graceful shutdown via context cancellation is straightforward.
-
-**Tradeoff**: A panic in a worker goroutine could crash the entire app. Mitigated by `recover()` in each goroutine's main loop.
+**Decision**: All pipeline tiers run as goroutines within the TUI binary, communicating via Go channels.
 
 ---
 
 ## Decision 14: `gopxl/beep/v2` for Audio Playback
 
-**Decision**: `github.com/gopxl/beep/v2` (active fork of `faiface/beep`)
+**Decision**: `github.com/gopxl/beep/v2` (active fork of `faiface/beep`).
 
-**Rationale**: Shares `go-mp3` decoder with MFCC pipeline (no duplicate decoder dependency). Streamer abstraction for play/pause/seek/volume. Oto backend is cross-platform (macOS, Linux, Windows). Can stream from `io.Reader` (HTTP response body, no disk write).
-
-**Tradeoff**: `beep/v2/mp3` may not fully support streaming from non-seekable `io.Reader` for all operations (seeking requires re-decoding). If seeking from HTTP stream fails, we'll buffer the full MP3 in memory (typical IA MP3 is <5 MB for a 3-min track at 192 kbps — acceptable for playback, not for analysis). Speaker initialization must happen once; sample rate is fixed per session.
+**Status**: Not yet implemented (Phase 7).
 
 ---
 
@@ -142,26 +117,71 @@
 
 **Decision**: Bidirectional Go channels — `chan ActivityEvent` (goroutines→TUI) and `chan ControlCmd` (TUI→goroutines).
 
-**Rationale**: Clean separation — TUI owns display state, goroutines own I/O. Channels are buffered to prevent blocking. Event struct carries all needed context (type, timestamp, identifier, data). Bubbletea's `tea.Batch` can read from event channel and convert to messages. Control commands are fire-and-forget into buffered channel.
-
-**Tradeoff**: Type coupling — TUI must import event types. Acceptable; they're in the same module.
-
 ---
 
 ## Decision 16: Phase Exit Criteria = TUI-Runnable
 
-**Decision**: Every implementation phase MUST end with a runnable TUI where the phase's results are visible and interactive. No phase is complete until the user can manually verify the deliverables.
-
-**Rationale**: User explicitly requested ability to test each phase manually before proceeding. Prevents accumulating untested code. Ensures integration works from the start (not a "big bang" at the end). Forces clean phase boundaries.
-
-**Tradeoff**: Slower initial development (building TUI scaffolding early). Worth it — catches integration issues immediately.
+**Decision**: Every implementation phase MUST end with a runnable TUI where deliverables are visible and interactive.
 
 ---
 
 ## Decision 17: Headless Mode Uses JSON-Structured stdout
 
-**Decision**: Headless mode logs structured JSON lines to stdout, errors to stderr. No TUI rendering at all.
+**Decision**: Headless mode logs structured JSON lines to stdout, errors to stderr.
 
-**Rationale**: Machine-parseable for CI/e2e tests. Human-readable enough for debugging. Same internal packages, same coordinator/worker goroutines, same code paths as TUI mode. Exit codes: 0 = clean shutdown, 1 = fatal error.
+---
 
-**Tradeoff**: Less visually appealing for manual headless use. Acceptable — headless is for automation, not interactive use.
+## Decision 18: Hybrid Recommendation Engine (MFCC + Chroma + CLAP)
+
+**Decision**: Three-component hybrid vector (MFCC 40-dim + Chroma 12-dim + CLAP 512-dim) → 564-dim via late fusion with weights 0.25/0.15/0.60.
+
+---
+
+## Decision 19: Multi-Metric Quality Scoring (SNR + Spectral Centroid + Crest Factor)
+
+**Decision**: Composite 0.0–1.0 quality score with three weighted metrics and SNR < 10 dB kill switch.
+
+---
+
+## Decision 20: Per-Track Data Model (Albums → Tracks → Embeddings)
+
+**Decision**: Model IA items as albums containing multiple tracks. Each track gets its own embedding. Replace the old per-item model (`catalog_queue` → `track_embeddings` by `ia_identifier`).
+
+**Rationale**: IA items are albums/collections containing many audio files. The old model picked one arbitrary MP3 per item, discarding all other tracks. A 15-song concert got one embedding from one random song. Per-track granularity enables meaningful browsing, searching, similarity comparison, and playback of individual songs.
+
+**Schema**: `albums` (1) → `tracks` (N) → `track_embeddings` (1:1 with tracks).
+
+---
+
+## Decision 21: Coordinator Owns Album Resolution
+
+**Decision**: Album resolution (fetching metadata, creating track records) runs in the coordinator's lifecycle, NOT in the worker/analyzer pool. Resolvers start/stop with the coordinator (`[s]`/`[x]`), while analyzers are managed independently (`[w]`/`[W]`).
+
+**Rationale**: Users expect the coordinator to fully populate the work queue. If workers resolved albums, the Browse tab would show nothing until workers ran. Having the coordinator handle both discovery and resolution ensures tracks are available for analysis (and browsing) as soon as the coordinator runs.
+
+---
+
+## Decision 22: MP3 Format 3-Tier Filtering
+
+**Decision**: When resolving albums, filter MP3 files with three tiers:
+1. Accept ALL "VBR MP3" automatically
+2. For "MP3" (CBR), check bitrate ≥ 192kbps
+3. Blacklist "64Kbps MP3" and "128Kbps MP3"
+
+**Rationale**: VBR MP3 files are either modern IA engine derivatives or high-quality user uploads. CBR files labeled simply "MP3" may be low bitrate. Legacy IA format tags like "128Kbps MP3" explicitly indicate low-fi compression.
+
+---
+
+## Decision 23: Album Art via Terminal Image Protocols
+
+**Decision**: Download and cache album art from `https://archive.org/services/img/{identifier}`. Render inline in terminals that support iTerm2/Kitty/Sixel protocols via `github.com/BourgeoisBear/rasterm`. Text placeholder fallback for unsupported terminals.
+
+**Rationale**: Album art is essential for verifying album identity when browsing. Most modern terminals (Ghostty, WezTerm, iTerm2, Kitty) support inline images. Art is cached to `data/art/` to avoid re-downloading.
+
+---
+
+## Decision 24: Browse Tab — Three View Modes
+
+**Decision**: Browse tab has three views: Albums list, Album detail, Tracks list. Toggle with `[m]`, drill into albums with `[enter]`, back with `[esc]`.
+
+**Rationale**: Users need to browse both at the album level (to verify what's been indexed, see art, check track counts) and at the track level (to search/play individual songs, run similarity queries).

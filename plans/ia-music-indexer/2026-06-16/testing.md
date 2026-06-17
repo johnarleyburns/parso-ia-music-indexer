@@ -1,5 +1,7 @@
 # Testing Strategy (Revision 2 — TUI + Headless + E2E)
 
+**NOTE**: DB schema references in this document (`catalog_queue`, `track_embeddings` with `ia_identifier` PK) are outdated. Current schema uses `albums → tracks → track_embeddings (track_id PK)`. Current test count: 43 tests (16 audio, 20 db, 5 hybrid, 2 rate). See `current_state.md` for latest.
+
 ## Problem
 
 Each implementation phase must be independently testable. The pipeline has external dependencies (Internet Archive APIs) that need mocking for unit tests. SQLite with sqlite-vec must be tested with real extension loading. The TUI must be testable. Headless mode must serve as an e2e test entry point.
@@ -13,11 +15,15 @@ Isolated logic tests with no external dependencies.
 | Module | What to test | Phase |
 |---|---|---|
 | `internal/rate/` | Token bucket enforces rate; throttled reader limits bytes/sec | 4–5 |
-| `internal/audio/snr.go` | SNR on known PCM signals: sine wave → high SNR (>40 dB); white noise → low SNR (<5 dB) | 5 |
-| `internal/audio/mfcc.go` | MFCC output is []float32 length 40; known sine wave produces expected band distribution | 5 |
-| `internal/audio/decode.go` | Decoding a valid MP3 byte slice produces correct sample count | 5 |
+| `internal/audio/mfcc.go` | MFCC output is 40-dim; non-zero for audio input; zero for silence | 2B |
+| `internal/audio/chroma.go` | Chroma output is 12-dim; 440Hz sine maps to A note bin; zero for silence | 2B |
+| `internal/audio/quality.go` | SNR > 40 dB for sine; SNR < 5 dB for white noise; Centroid ~440 Hz for sine; kill switch at SNR < 10; composite in [0,1]; weights verify | 2B |
+| `internal/hybrid/fusion.go` | Output is 564-dim; weights applied correctly; zero input → zero output; length mismatch panics | 2B |
+| `internal/clap/client.go` | Mock client returns correct 512-dim vector; gRPC client struct compiles | 2B |
+| `internal/audio/snr.go` | (Removed — merged into quality.go in Phase 2B) | 2B |
+| `internal/audio/mp3decode.go` | Decoding a valid MP3 byte slice produces correct sample count | 5 |
 | `internal/ia/types.go` | JSON unmarshaling of IA Scraping API response and metadata response | 4 |
-| `internal/config/config.go` | Config defaults, env var overrides, flag parsing | 1 |
+| `internal/config/config.go` | Config defaults, env var overrides, flag parsing (including new ClapHost/ClapPort) | 1, 2B |
 
 ### Integration Tests
 
@@ -25,9 +31,12 @@ Tests with real SQLite database (`:memory:` or temp file).
 
 | Module | What to test | Phase |
 |---|---|---|
-| `internal/db/db.go` | SQLite opens in WAL mode; sqlite-vec loads; migrations run idempotently (run twice, no error) | 2 |
+| `internal/db/db.go` | SQLite opens in WAL mode; migrations run idempotently (run twice, no error) | 2 |
 | `internal/db/queue.go` | `ClaimNextBatch` — optimistic locking, concurrent claims don't overlap; `ResetStuckJobs` recovers old locks; `MarkCompleted`/`MarkFailed` state transitions; `BulkInsertPending` INSERT OR IGNORE | 2 |
-| `internal/db/embeddings.go` | `SaveEmbedding` stores vector; `QuerySimilar` returns correct identifier with distance ordering; empty DB query returns empty | 2, 6 |
+| `internal/db/embeddings.go` | `SaveEmbedding` stores 564-dim vector; `QuerySimilar` returns correct identifier with distance ordering; mixed-dimension vectors skipped; empty DB query returns empty | 2, 2B |
+| `internal/audio/mfcc.go` | MFCC on real WAV test fixture produces sensible 40-dim output | 2B |
+| `internal/audio/chroma.go` | Chroma on real WAV test fixture produces sensible 12-dim output | 2B |
+| `internal/hybrid/fusion.go` | Fusion of real MFCC+Chroma+mock CLAP produces correct combined 564-dim vector | 2B |
 | `internal/audio/stream.go` | HTTP Range request against mock server returns correct byte range | 5 |
 | `internal/ia/scrape.go` | Mock IA Scraping API server returns valid JSON; `ScrapePage` parses correctly | 4 |
 | `internal/ia/client.go` | Mock server returns 429 → retry with backoff succeeds; 503 → retry max then error | 4 |
@@ -90,7 +99,7 @@ tests/e2e/
 3. Monitor stdout for analysis_complete events
 4. Wait until 5+ analysis_complete events
 5. Send SIGINT
-6. Assert: track_embeddings has 5+ rows; quality_score is valid float; embedding length 40
+6. Assert: track_embeddings has 5+ rows; quality_score is valid float; embedding length 564
 7. Assert: catalog_queue has 5+ rows with status=completed
 ```
 
@@ -123,7 +132,7 @@ tests/e2e/
 2. SIGINT
 3. Open DB directly via Go test helper
 4. Call QuerySimilar for a completed track
-5. Assert: returns 5 results; distances are valid floats between 0 and 2 (cosine distance); results exclude the query track itself
+5. Assert: returns 5 results; all vectors are 564-dim; distances are valid floats between 0 and 2 (cosine distance); results exclude the query track itself
 ```
 
 #### Test Runner (`tests/e2e/run.sh`)
@@ -181,8 +190,10 @@ BINARY=./bin/parso-indexer ./tests/e2e/run.sh
 
 | Fixture | Purpose | Phase |
 |---|---|---|
-| `testdata/sine_440hz_5s.mp3` | Clean 440Hz sine wave — verify SNR > 40 dB | 5 |
-| `testdata/noise_5s.mp3` | White noise — verify SNR < 5 dB | 5 |
+| `testdata/sine_440hz_5s.wav` | Clean 440Hz sine wave — verify chroma A-note bin, centroid ~440 Hz, SNR > 40 dB | 2B |
+| `testdata/silence_1s.wav` | Silence — verify MFCC/chroma zero output, SNR near 0, composite ~0.0 | 2B |
+| `testdata/white_noise.wav` | White noise — verify SNR < 5 dB, composite < 0.3 | 2B |
+| `testdata/noise_5s.mp3` | White noise MP3 — verify SNR < 5 dB with MP3 decode | 5 |
 | `testdata/ia_scrape_response.json` | Mock IA Scraping API response for unit tests | 4 |
 | `testdata/ia_item_metadata.json` | Mock IA metadata response with .mp3 file info | 5 |
 | `testdata/small_30s.mp3` | Real 30s MP3 for integration tests | 5 |

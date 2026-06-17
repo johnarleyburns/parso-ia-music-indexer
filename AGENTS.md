@@ -309,14 +309,24 @@ If solving an authentication bug, do not also refactor:
 ### Phase 6 — Verification
 
 After each implementation phase, run validation:
-- Tests pass
-- Build succeeds
+- Tests pass (`go test ./...`)
+- Build succeeds (`make build` produces `bin/timbre`)
 - No regressions introduced
 - Static analysis passes
 - Existing functionality preserved
 - Performance unaffected
 
 > **Never stack multiple unverified phases.**
+
+#### Handoff to User
+
+Before asking the user to verify output:
+
+1. **Build the binary.** Always run `make build` (or equivalent). The binary lives at `bin/timbre`. Never instruct the user to use `go run` — the binary is the deliverable.
+2. **Run the full test suite.** Run `go test ./...` and confirm all tests pass. Report the count.
+3. **Present both results.** Binary built + test count = ready for user verification.
+
+> **Never ask the user to test without first building the binary and running the tests yourself.**
 
 #### Testing Philosophy
 
@@ -445,6 +455,8 @@ The agent must **NEVER**:
 - Ignore testing requirements
 - Ignore backward compatibility
 - Make speculative changes
+- Ask the user to run `go run` — always build the binary first via `make build`
+- Ask the user to test without first building and running the test suite themselves
 
 ---
 

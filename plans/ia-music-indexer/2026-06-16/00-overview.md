@@ -1,4 +1,4 @@
-# 00 — Project Overview (Revision 2 — TUI-Based)
+# 00 — Project Overview (Revision 3 — Three-Tier Pipeline, Per-Track)
 
 ## Problem
 
@@ -12,13 +12,19 @@ The Internet Archive hosts ~14–15 million audio recordings, roughly 3–5 mill
 ## Goal
 
 Build a **self-contained, TUI-driven audio indexing pipeline** that:
-1. Discovers music tracks from Internet Archive collections
-2. Streams only the first ~30 seconds of each MP3 derivative into memory
-3. Extracts MFCC-based audio embeddings (40-dim vectors) and a quality score (SNR)
-4. Stores embeddings in a local SQLite database with `sqlite-vec` for vector search
-5. Provides a rich terminal UI (Bubble Tea) for live progress monitoring, worker control, search, and playback
-6. Supports headless mode (`--headless`) for CI/e2e testing and background server operation
-7. Runs entirely locally on a developer laptop — zero external services, zero shell scripts
+1. Discovers music **albums** (IA items) from Internet Archive collections
+2. Resolves each album into individual **tracks** (MP3 files), filtering by quality (VBR or ≥192kbps CBR)
+3. Streams only the first ~30 seconds of each track into memory
+4. Extracts a hybrid audio embedding (564-dim vector) via late fusion of three complementary features:
+   - MFCC (40-dim) — acoustic texture and timbre via `go-mfcc`
+   - Chroma (12-dim) — harmonic profile via FFT frequency→pitch mapping
+   - CLAP (512-dim) — deep semantic understanding (mood, genre, instruments) via `laion/clap-htsat-fused` in a Python sidecar over gRPC
+5. Computes a multi-metric quality score (SNR + Spectral Centroid + Crest Factor) per track
+6. Stores per-track embeddings in a local SQLite database (BLOB storage, pure Go cosine similarity)
+7. Provides a rich terminal UI (Bubble Tea) with album art, album/track browsing, and playback
+8. Uses a three-tier pipeline: Coordinator (discovery) → Resolvers (album→tracks) → Analyzers (track→embedding)
+9. Supports headless mode (`--headless`) for CI/e2e testing and background operation
+10. Runs entirely locally on a developer laptop — zero external services, zero shell scripts
 
 ## Target Collections
 
@@ -37,10 +43,10 @@ Excludes: LibriVox, podcasts, spoken word.
 | Metric | Value |
 |---|---|
 | Target tracks to index | ~4,000,000 |
-| Per-track raw row size | ~198 bytes |
-| Per-track with overhead | ~250 bytes |
-| Total DB size (4M tracks) | ~1 GB |
-| Per-track analysis time | ~30 seconds streaming |
+| Per-track raw row size | ~2344 bytes |
+| Per-track with overhead | ~2500 bytes |
+| Total DB size (4M tracks) | ~4–9 GB |
+| Per-track analysis time | ~30 seconds streaming + ~200ms MFCC/Chroma + ~200–500ms CLAP |
 | Per-track bandwidth | ~1.6 MB (30s @ 450kbps MP3) |
 | Coordinated discovery time | ~hours (1 server, metadata only) |
 | Time on single IP @ 450kbps | ~2.3 years (sequential); ~56 days (50 concurrent) |
@@ -48,19 +54,31 @@ Excludes: LibriVox, podcasts, spoken word.
 
 ## Phased Approach
 
-### Phase 1–7 — Local Single-Binary TUI (ALL PHASES)
-- Single Go binary (`cmd/tui/main.go`)
-- SQLite + sqlite-vec locally
-- Coordinator + worker pool as goroutines managed by TUI
+### Phase 1–6 — Core Pipeline (COMPLETE)
+- Single Go binary with Bubble Tea TUI
+- SQLite with BLOB vector storage, pure Go cosine similarity
+- Coordinator + worker pool as goroutines
 - 4-tab interface: Dashboard, Live Log, Browse/Search, Player
-- Headless mode (`--headless`) for automated testing
-- Process tracks sorted by download count for "maximum impact"
-- Pause after each phase for manual TUI verification
+
+### Phase 2B — Hybrid Recommendation Engine (COMPLETE)
+- MFCC (40-dim), Chroma (12-dim), CLAP gRPC client (512-dim)
+- Late fusion engine (564-dim weighted concatenation)
+- Multi-metric quality scoring (SNR + Centroid + Crest Factor)
+
+### Phase PX — Per-Track Model + Three-Tier Pipeline (COMPLETE)
+- Albums → Tracks → Embeddings data model (replaces per-item catalog_queue)
+- Three-tier pipeline: Coordinator (singleton) → Album Resolvers (pool) → Track Analyzers (pool)
+- Album art rendering via rasterm (iTerm2/Kitty/Sixel)
+- Browse tab redesign: Albums view, Album detail, Tracks view
+- MP3 3-tier filtering: VBR accept, CBR ≥192, blacklist 64/128
+
+### Phase 7 — Player Tab (PENDING)
+- Audio playback via `gopxl/beep/v2`
+- Play/pause/stop/seek/volume controls, play queue
 
 ### Phase 8+ — Distributed Workers (FUTURE)
 - Central Turso/libSQL database
 - Multiple VPS/edge nodes running workers
-- Deployed via colima/incus containers (reference: `../fast-internet-portal`)
 
 ### Phase 9+ — API / Recommendation Server (FUTURE)
 - REST API for querying nearest-neighbor tracks by vector
@@ -72,9 +90,10 @@ Excludes: LibriVox, podcasts, spoken word.
 | File | Purpose |
 |---|---|
 | `00-overview.md` | This document — problem, goals, scope |
+| `02b-hybrid-engine.md` | Phase 2B plan — hybrid recommendation engine core (MFCC + Chroma + CLAP + Fusion) |
 | `architecture.md` | System architecture, component design, data flow, event system |
-| `data-model.md` | SQLite schema, queue state machine, vector format |
+| `data-model.md` | SQLite schema, queue state machine, hybrid vector format |
 | `implementation.md` | Phased implementation steps, file/module layout, exit criteria per phase |
 | `testing.md` | Testing strategy — unit, integration, TUI component, e2e (headless) |
-| `decisions.md` | 17 key architectural decisions with rationale |
+| `decisions.md` | 18 key architectural decisions with rationale |
 | `current_state.md` | Current progress, completed/pending phases |
