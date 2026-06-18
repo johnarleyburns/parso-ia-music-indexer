@@ -7,14 +7,15 @@ import (
 )
 
 type Config struct {
-	DBPath      string
-	Headless    bool
-	Workers     int
-	MaxBytes    int
-	ThrottleBPS int
-	IAApiRate   int
-	ClapHost    string
-	ClapPort    int
+	DBPath         string
+	Headless       bool
+	Workers        int
+	MaxBytes       int
+	ThrottleBPS    int
+	IAApiRate      int
+	ClapHost       string
+	ClapPort       int
+	ClapSidecarDir string
 }
 
 func Parse() *Config {
@@ -28,6 +29,7 @@ func Parse() *Config {
 	flag.IntVar(&cfg.IAApiRate, "ia-api-rate", envOrDefaultInt("IA_API_RATE", 15), "IA API requests per minute")
 	flag.StringVar(&cfg.ClapHost, "clap-host", envOrDefault("CLAP_HOST", "localhost"), "CLAP gRPC server host")
 	flag.IntVar(&cfg.ClapPort, "clap-port", envOrDefaultInt("CLAP_PORT", 50051), "CLAP gRPC server port")
+	flag.StringVar(&cfg.ClapSidecarDir, "clap-sidecar-dir", envOrDefault("CLAP_SIDECAR_DIR", "python_sidecar"), "Path to CLAP Python sidecar directory")
 	flag.Parse()
 
 	return cfg

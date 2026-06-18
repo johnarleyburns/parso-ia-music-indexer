@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package clap;
 
-option go_package = "./clap_proto";
+option go_package = "github.com/johnarleyburns/parso-ia-music-indexer/internal/clap/clap_proto";
 
 // CLAPEmbedder defines the gRPC contract between the Go orchestrator
 // and the Python neural inference sidecar.

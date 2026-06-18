@@ -47,7 +47,7 @@ func isTransientError(errMsg string) bool {
 	return false
 }
 
-func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent, controls <-chan tui.ControlCmd, metrics *tui.Metrics) {
+func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent, controls <-chan tui.ControlCmd, metrics *tui.Metrics, clapClient clap.CLAPClient) {
 	coordRunning := false
 	coordStopCh := make(chan struct{})
 
@@ -60,7 +60,6 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 	workerStopChs := make(map[int]chan struct{})
 
 	dbMu := &sync.Mutex{}
-	clapClient := clap.NewMockClient()
 	iaClient := ia.NewClient(60 * time.Second)
 	iaClient.Transport = tui.NewInstrumentedTransport(metrics)
 	metaLimiter := ratelimit.NewLimiter(cfg.IAApiRate)
@@ -554,7 +553,8 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	chromaVec := audio.ComputeChromaPool(pcmSamples)
 
 	clapCtx, clapCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	clapVec, err := clapClient.GetEmbedding(clapCtx, nil, int32(sampleRate))
+	pcmBytes := clap.Float32ToBytes(pcmSamples)
+	clapVec, err := clapClient.GetEmbedding(clapCtx, pcmBytes, int32(sampleRate))
 	clapCancel()
 	if err != nil {
 		errMsg := fmt.Sprintf("clap: %v", err)
@@ -800,13 +800,26 @@ func runTUI(cfg *config.Config) {
 	}
 	defer sqlDB.Close()
 
+	logDir := filepath.Dir(cfg.DBPath)
+	sidecarProc, clapClient, err := clap.EnsureSidecar(cfg.ClapHost, cfg.ClapPort, cfg.ClapSidecarDir, logDir, func(msg string) {
+		fmt.Fprintf(os.Stderr, "%s\n", msg)
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "CLAP sidecar error: %v\n", err)
+		os.Exit(1)
+	}
+	if sidecarProc != nil {
+		defer sidecarProc.Stop()
+	}
+	defer clapClient.Close()
+
 	artDir := filepath.Join(filepath.Dir(cfg.DBPath), "art")
 	artCache := tui.NewArtCache(artDir)
 	metrics := tui.NewMetrics()
 
 	events := tui.NewEventChannel()
 	controls := tui.NewControlChannel()
-	go runCoordinator(cfg, sqlDB, events, controls, metrics)
+	go runCoordinator(cfg, sqlDB, events, controls, metrics, clapClient)
 
 	m := tui.NewMainModel(cfg, sqlDB.Conn, events, controls, artCache, metrics, cfg.DBPath, artDir)
 	p := tea.NewProgram(m)
@@ -823,6 +836,19 @@ func runHeadless(cfg *config.Config) {
 		os.Exit(1)
 	}
 	defer sqlDB.Close()
+
+	logDir := filepath.Dir(cfg.DBPath)
+	sidecarProc, clapClient, err := clap.EnsureSidecar(cfg.ClapHost, cfg.ClapPort, cfg.ClapSidecarDir, logDir, func(msg string) {
+		fmt.Fprintf(os.Stderr, "%s\n", msg)
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "CLAP sidecar error: %v\n", err)
+		os.Exit(1)
+	}
+	if sidecarProc != nil {
+		defer sidecarProc.Stop()
+	}
+	defer clapClient.Close()
 
 	stats, err := db.GetCombinedStats(sqlDB.Conn)
 	if err != nil {
@@ -864,7 +890,7 @@ func runHeadless(cfg *config.Config) {
 	events := tui.NewEventChannel()
 	controls := tui.NewControlChannel()
 	metrics := tui.NewMetrics()
-	go runCoordinator(cfg, sqlDB, events, controls, metrics)
+	go runCoordinator(cfg, sqlDB, events, controls, metrics, clapClient)
 
 	controls <- tui.ControlCmd{Action: tui.CmdStartCoordinator}
 

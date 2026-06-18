@@ -3,4 +3,7 @@ bin/
 data/*.db
 data/*.db-wal
 data/*.db-shm
+data/*.log
 data/art/
+python_sidecar/.venv/
+__pycache__/

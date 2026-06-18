@@ -1,10 +1,10 @@
 # Current State
 
-## Date: 2026-06-17
+## Date: 2026-06-18
 
-## Status: PHASE 7 IMPLEMENTED — Player Tab (Pending Verification)
+## Status: CLAP Sidecar Lifecycle Management COMPLETE — Pending Verification
 
-**Phase 7 IMPLEMENTED** — Audio player tab with beep/v2, playback controls (play/pause/stop/seek/volume), play queue, download+stream from IA, graceful shutdown.
+**CLAP sidecar lifecycle management COMPLETE** — Binary auto-starts Python sidecar if not running, hard error if connection fails, process killed on exit.
 
 ## Architecture (Revision 3)
 
@@ -48,6 +48,24 @@ Tier 3: Track Analyzers (pool)  [w/W]  → track_embeddings table
   - [x] P7-5: SwitchToPlayerMsg forwarding + player message routing in model.go
   - [x] P7-6: Graceful shutdown (engine.Close on quit, speaker.Clear on stop)
   - [x] P7-7: Build + test verification (43 tests passing, binary built)
+- [x] CLAP gRPC Integration
+  - [x] Added gRPC Go dependencies (google.golang.org/grpc, google.golang.org/protobuf)
+  - [x] Generated Go proto stubs (internal/clap/clap_proto/)
+  - [x] Generated Python proto stubs (python_sidecar/clap_pb2*.py)
+  - [x] Implemented real grpcCLAPClient (internal/clap/grpc_client.go)
+  - [x] Added Float32ToBytes PCM conversion utility
+  - [x] Wired real CLAP client into main.go with graceful fallback to mock
+  - [x] Fixed analyzeTrack to pass actual PCM data to GetEmbedding
+  - [x] Updated Makefile with `proto` and `test` targets
+  - [x] Added 9 tests for CLAP client (mock, PCM conversion, unreachable host)
+- [x] CLAP Sidecar Lifecycle Management
+  - [x] Added `internal/clap/sidecar.go` with `EnsureSidecar()` and `SidecarProcess`
+  - [x] Auto-detects running sidecar, auto-starts if not running
+  - [x] Hard error on connection failure (no silent mock fallback)
+  - [x] Process cleanup on program exit (SIGTERM → SIGKILL)
+  - [x] Added `--clap-sidecar-dir` config flag
+  - [x] Moved CLAP client ownership to `runTUI`/`runHeadless`
+  - [x] Added 5 sidecar tests
 
 ## Pending Phases
 
@@ -66,10 +84,12 @@ Art cache: `data/art/{identifier}.jpg`
 
 ```
 internal/audio   16 tests
+internal/clap    14 tests
 internal/db      20 tests
 internal/hybrid   5 tests
 internal/rate     2 tests
-Total: 43 tests passing
+internal/tui     15 tests
+Total: 72 tests passing
 ```
 
 ## Known Blockers
@@ -78,8 +98,14 @@ Total: 43 tests passing
 2. ~~SQLite WAL + concurrency~~ — Resolved: mutex-serialized writes
 3. ~~beep/v2 MP3 streaming~~ — Resolved: bytes.Reader (seekable) wrapping downloaded MP3 data
 4. **CLAP model memory** — ~300MB, verify on 8GB MacBooks
-5. **gRPC proto generation** — Need protoc toolchain or committed generated code
+5. ~~gRPC proto generation~~ — Resolved: protoc + Go/Python plugins, `make proto` target, stubs committed
 
 ## Next Action
 
-User verification of Phase 7 exit criteria.
+User verification of CLAP sidecar lifecycle management:
+1. `make build` produces `bin/timbre`
+2. `make test` — 72 tests passing
+3. Without sidecar running: binary auto-starts Python sidecar, connects, and proceeds
+4. With sidecar already running: binary detects it and connects immediately
+5. Without python_sidecar/ dir: binary exits with clear error message
+6. On quit: sidecar child process is killed
