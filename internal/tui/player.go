@@ -465,9 +465,6 @@ func (m PlayerModel) View() tea.View {
 	b.WriteString(mutedStyle.Render(hints))
 
 	content := b.String()
-	if m.Height > 3 {
-		content = lipgloss.Place(m.Width, m.Height-3, lipgloss.Left, lipgloss.Top, content)
-	}
 
 	return tea.NewView(content)
 }

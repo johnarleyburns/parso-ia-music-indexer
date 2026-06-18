@@ -233,10 +233,6 @@ func (m DashboardModel) View() tea.View {
 
 	content := titleStyle.Render("Dashboard") + "\n\n" + body
 
-	if m.Height > 3 {
-		content = lipgloss.Place(m.Width, m.Height-3, lipgloss.Left, lipgloss.Top, content)
-	}
-
 	return tea.NewView(content)
 }
 
@@ -312,16 +308,16 @@ func (m DashboardModel) buildPoolSection(sectionTitle func(string) string, name 
 	s += fmt.Sprintf("  Active: %d\n", count)
 
 	for _, w := range states {
-		task := ""
+		line := mutedStyle.Render(fmt.Sprintf("    %s: %d ok / %d fail",
+			w.ID, w.ProcessedCount, w.FailedCount))
 		if w.CurrentTask != "" {
 			short := w.CurrentTask
 			if len(short) > 20 {
 				short = short[:20] + "..."
 			}
-			task = processingStyle.Render(fmt.Sprintf(" → %s", short))
+			line += processingStyle.Render(fmt.Sprintf(" → %s", short))
 		}
-		s += mutedStyle.Render(fmt.Sprintf("    %s: %d ok / %d fail%s\n",
-			w.ID, w.ProcessedCount, w.FailedCount, task))
+		s += line + "\n"
 	}
 
 	s += mutedStyle.Render("  " + controls)

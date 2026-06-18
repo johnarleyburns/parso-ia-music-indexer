@@ -128,9 +128,5 @@ func (m LiveLogModel) View() tea.View {
 
 	content := panel.Render(panelContent)
 
-	if m.Height > 3 {
-		content = lipgloss.Place(m.Width, m.Height-3, lipgloss.Left, lipgloss.Top, content)
-	}
-
 	return tea.NewView(content)
 }

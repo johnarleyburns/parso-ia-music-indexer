@@ -3,6 +3,7 @@ package tui
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/config"
@@ -274,10 +275,16 @@ func (m MainModel) View() tea.View {
 	statusBar := RenderStatusBar(m.Metrics, m.Dashboard.Stats, m.Resources, m.Width)
 	statusHeight := lipgloss.Height(statusBar)
 
-	contentHeight := m.Height - lipgloss.Height(tabBar.View()) - helpHeight - statusHeight - 1
+	contentHeight := m.Height - lipgloss.Height(tabBar.View()) - helpHeight - statusHeight
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
+
+	contentLines := strings.Split(content, "\n")
+	if len(contentLines) > contentHeight {
+		contentLines = contentLines[:contentHeight]
+	}
+	content = strings.Join(contentLines, "\n")
 
 	panelStyle := lipgloss.NewStyle().
 		Width(m.Width).

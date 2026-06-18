@@ -163,7 +163,12 @@ func (c *ArtCache) encodeImage(img image.Image, cols, rows int) string {
 			return ""
 		}
 	case "iterm":
-		if err := rasterm.ItermWriteImage(&buf, img); err != nil {
+		opts := rasterm.ItermImgOpts{
+			DisplayInline: true,
+			Width:         fmt.Sprintf("%d", cols),
+			Height:        fmt.Sprintf("%d", rows),
+		}
+		if err := rasterm.ItermWriteImageWithOptions(&buf, img, opts); err != nil {
 			return ""
 		}
 	default:
