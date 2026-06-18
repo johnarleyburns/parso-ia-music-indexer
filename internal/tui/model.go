@@ -190,6 +190,12 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Player, cmd = m.Player.Update(msg)
 		return m, cmd
 
+	case SwitchToAlbumMsg:
+		m.ActiveTab = 2
+		var cmd tea.Cmd
+		m.Browse, cmd = m.Browse.Update(msg)
+		return m, cmd
+
 	case ActivityEvent:
 		var cmd1, cmd2 tea.Cmd
 		m.Dashboard, cmd1 = m.Dashboard.Update(msg)
@@ -229,7 +235,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Player, cmd2 = m.Player.Update(msg)
 		return m, tea.Batch(cmd1, cmd2)
 
-	case playerLoadedMsg, playerErrorMsg, playerTickMsg, playerDoneMsg:
+	case playerLoadedMsg, playerErrorMsg, playerTickMsg, playerDoneMsg, playerStatsMsg:
 		var cmd tea.Cmd
 		m.Player, cmd = m.Player.Update(msg)
 		return m, cmd

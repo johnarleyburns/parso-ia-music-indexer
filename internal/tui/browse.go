@@ -146,6 +146,15 @@ func (m BrowseModel) Init() tea.Cmd {
 
 func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case SwitchToAlbumMsg:
+		m.mode = ModeAlbumDetail
+		m.similarityMode = false
+		m.inputFocused = false
+		m.searchInput.Blur()
+		m.table.Focus()
+		m.loaded = true
+		return m, m.doAlbumDetail(msg.AlbumID)
+
 	case artLoadedMsg:
 		if m.artCache != nil {
 			m.artCache.StoreEncoded(msg.Identifier, msg.Cols, msg.Rows, msg.Encoded)
@@ -177,8 +186,9 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 				qs,
 			}
 		}
-		m.table.SetRows(rows)
+		m.table.SetRows([]table.Row{})
 		m.table.SetColumns(albumColumns())
+		m.table.SetRows(rows)
 		m.table.GotoTop()
 		m.loaded = true
 		m.lastCursor = 0
@@ -207,8 +217,9 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 			}
 			rows[i] = table.Row{num, t.Title, qs, t.Status}
 		}
-		m.table.SetRows(rows)
+		m.table.SetRows([]table.Row{})
 		m.table.SetColumns(albumDetailColumns())
+		m.table.SetRows(rows)
 		m.table.GotoTop()
 		m.inputFocused = false
 		m.searchInput.Blur()
@@ -227,8 +238,9 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 		for i, t := range msg.Tracks {
 			rows[i] = table.Row{t.Title, t.AlbumTitle, fmt.Sprintf("%.3f", t.QualityScore)}
 		}
-		m.table.SetRows(rows)
+		m.table.SetRows([]table.Row{})
 		m.table.SetColumns(trackColumns())
+		m.table.SetRows(rows)
 		m.table.GotoTop()
 		m.loaded = true
 		return m, nil
@@ -244,8 +256,9 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 		for i, t := range msg.Tracks {
 			rows[i] = table.Row{t.Title, t.AlbumID, fmt.Sprintf("%.3f", t.QualityScore), fmt.Sprintf("%.4f", t.Distance)}
 		}
-		m.table.SetRows(rows)
+		m.table.SetRows([]table.Row{})
 		m.table.SetColumns(similarColumns())
+		m.table.SetRows(rows)
 		m.table.GotoTop()
 		return m, nil
 

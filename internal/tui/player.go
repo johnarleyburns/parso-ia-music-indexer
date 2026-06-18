@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johnarleyburns/parso-ia-music-indexer/internal/db"
+
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
@@ -43,6 +45,17 @@ type playerTickMsg time.Time
 
 type playerDoneMsg struct{}
 
+type playerStatsMsg struct {
+	Quality    float64
+	Collection string
+	Creator    string
+	Similar    []db.SimilarTrack
+}
+
+type SwitchToAlbumMsg struct {
+	AlbumID string
+}
+
 type PlayerModel struct {
 	engine      *PlayerEngine
 	queue       []QueueItem
@@ -60,6 +73,11 @@ type PlayerModel struct {
 	artCache     *ArtCache
 	currentArt   string
 	currentArtID string
+
+	trackQuality    float64
+	trackCollection string
+	trackCreator    string
+	similarTracks   []db.SimilarTrack
 }
 
 func NewPlayerModel(sqlDB *sql.DB, artCache *ArtCache) PlayerModel {
@@ -126,7 +144,7 @@ func (m PlayerModel) Update(msg tea.Msg) (PlayerModel, tea.Cmd) {
 		m.state = StatePlaying
 		m.engine.SetVolume(m.volumeLevel)
 		m.errMsg = ""
-		return m, tea.Batch(playerTickCmd(), waitForTrackDone(doneCh))
+		return m, tea.Batch(playerTickCmd(), waitForTrackDone(doneCh), m.loadStatsCmd())
 
 	case playerErrorMsg:
 		m.errMsg = msg.err.Error()
@@ -148,6 +166,7 @@ func (m PlayerModel) Update(msg tea.Msg) (PlayerModel, tea.Cmd) {
 		return m, nil
 
 	case playerDoneMsg:
+		m.clearStats()
 		if m.currentIdx+1 < len(m.queue) {
 			m.currentIdx++
 			m.state = StateLoading
@@ -164,6 +183,13 @@ func (m PlayerModel) Update(msg tea.Msg) (PlayerModel, tea.Cmd) {
 		m.state = StateStopped
 		m.elapsed = 0
 		m.total = 0
+		return m, nil
+
+	case playerStatsMsg:
+		m.trackQuality = msg.Quality
+		m.trackCollection = msg.Collection
+		m.trackCreator = msg.Creator
+		m.similarTracks = msg.Similar
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -200,13 +226,14 @@ func (m PlayerModel) handleKey(msg tea.KeyPressMsg) (PlayerModel, tea.Cmd) {
 		}
 		return m, nil
 
-	case "n":
+	case "n", ">":
 		if m.currentIdx+1 < len(m.queue) {
 			m.engine.Stop()
 			m.currentIdx++
 			m.state = StateLoading
 			m.elapsed = 0
 			m.total = 0
+			m.clearStats()
 			next := m.queue[m.currentIdx]
 			artCmd := m.loadPlayerArt(next.AlbumID, next.ArtURL)
 			loadCmd := m.loadCurrentTrackCmd()
@@ -214,6 +241,35 @@ func (m PlayerModel) handleKey(msg tea.KeyPressMsg) (PlayerModel, tea.Cmd) {
 				return m, tea.Batch(loadCmd, artCmd)
 			}
 			return m, loadCmd
+		}
+		return m, nil
+
+	case "b", "<":
+		if m.currentIdx > 0 {
+			m.engine.Stop()
+			m.currentIdx--
+			m.state = StateLoading
+			m.elapsed = 0
+			m.total = 0
+			m.clearStats()
+			prev := m.queue[m.currentIdx]
+			artCmd := m.loadPlayerArt(prev.AlbumID, prev.ArtURL)
+			loadCmd := m.loadCurrentTrackCmd()
+			if artCmd != nil {
+				return m, tea.Batch(loadCmd, artCmd)
+			}
+			return m, loadCmd
+		}
+		return m, nil
+
+	case "a":
+		if len(m.queue) > 0 && m.currentIdx < len(m.queue) {
+			current := m.queue[m.currentIdx]
+			if current.AlbumID != "" {
+				return m, func() tea.Msg {
+					return SwitchToAlbumMsg{AlbumID: current.AlbumID}
+				}
+			}
 		}
 		return m, nil
 
@@ -325,6 +381,42 @@ func waitForTrackDone(ch <-chan struct{}) tea.Cmd {
 	}
 }
 
+func (m PlayerModel) loadStatsCmd() tea.Cmd {
+	if m.currentIdx >= len(m.queue) || m.DB == nil {
+		return nil
+	}
+	item := m.queue[m.currentIdx]
+	trackID := item.TrackID
+	albumID := item.AlbumID
+	sqlDB := m.DB
+	return func() tea.Msg {
+		var stats playerStatsMsg
+		_, quality, err := db.GetEmbedding(sqlDB, trackID)
+		if err == nil {
+			stats.Quality = quality
+		}
+		if albumID != "" {
+			album, err := db.GetAlbumByID(sqlDB, albumID)
+			if err == nil {
+				stats.Collection = album.Collection
+				stats.Creator = album.Creator
+			}
+		}
+		similar, err := db.QuerySimilar(sqlDB, trackID, 10)
+		if err == nil {
+			stats.Similar = similar
+		}
+		return stats
+	}
+}
+
+func (m *PlayerModel) clearStats() {
+	m.trackQuality = 0
+	m.trackCollection = ""
+	m.trackCreator = ""
+	m.similarTracks = nil
+}
+
 func (m PlayerModel) View() tea.View {
 	if m.Width == 0 {
 		return tea.NewView("loading...")
@@ -431,6 +523,22 @@ func (m PlayerModel) View() tea.View {
 		b.WriteString(mutedStyle.Render(fmt.Sprintf("%d%%", int(m.volumeLevel*100))))
 		b.WriteString("\n\n")
 
+		if m.trackQuality > 0 || m.trackCollection != "" || m.trackCreator != "" {
+			labelStyle := lipgloss.NewStyle().Foreground(Secondary)
+			var infoParts []string
+			if m.trackQuality > 0 {
+				infoParts = append(infoParts, labelStyle.Render("Quality:")+" "+mutedStyle.Render(fmt.Sprintf("%.3f", m.trackQuality)))
+			}
+			if m.trackCreator != "" {
+				infoParts = append(infoParts, labelStyle.Render("Artist:")+" "+mutedStyle.Render(m.trackCreator))
+			}
+			if m.trackCollection != "" {
+				infoParts = append(infoParts, labelStyle.Render("Collection:")+" "+mutedStyle.Render(m.trackCollection))
+			}
+			b.WriteString("  " + strings.Join(infoParts, "  "))
+			b.WriteString("\n\n")
+		}
+
 		if m.errMsg != "" {
 			b.WriteString("  ")
 			b.WriteString(lipgloss.NewStyle().Foreground(Danger).Render("Error: " + m.errMsg))
@@ -459,9 +567,25 @@ func (m PlayerModel) View() tea.View {
 			}
 			b.WriteString("\n")
 		}
+
+		if len(m.similarTracks) > 0 {
+			b.WriteString(PanelTitleStyle.Render("Similar Tracks"))
+			b.WriteString("\n\n")
+			for i, t := range m.similarTracks {
+				num := fmt.Sprintf("  %2d. ", i+1)
+				b.WriteString(mutedStyle.Render(num))
+				b.WriteString(textStyle.Render(truncateStr(t.Title, 30)))
+				b.WriteString("  ")
+				b.WriteString(mutedStyle.Render(truncateStr(t.AlbumID, 20)))
+				b.WriteString("  ")
+				b.WriteString(mutedStyle.Render(fmt.Sprintf("q:%.3f  d:%.4f", t.QualityScore, t.Distance)))
+				b.WriteString("\n")
+			}
+			b.WriteString("\n")
+		}
 	}
 
-	hints := "  [space] play/pause  [s] stop  [n] next  [\u2190/\u2192] seek \u00b15s  [\u2191/\u2193] volume  [c] clear"
+	hints := "  [space] play/pause  [s] stop  [b/<] prev  [n/>] next  [\u2190/\u2192] seek \u00b15s  [\u2191/\u2193] vol  [a] album  [c] clear"
 	b.WriteString(mutedStyle.Render(hints))
 
 	content := b.String()
