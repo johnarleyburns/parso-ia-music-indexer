@@ -126,6 +126,33 @@ func waitForActivityEvent(ch <-chan ActivityEvent) tea.Cmd {
 
 func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.MouseClickMsg:
+		if msg.Y <= 1 && msg.Button == tea.MouseLeft {
+			x := msg.X
+			offset := 0
+			for i, tab := range m.Tabs {
+				tabWidth := len(tab) + 4
+				if x >= offset && x < offset+tabWidth {
+					if i != m.ActiveTab {
+						prevTab := m.ActiveTab
+						m.ActiveTab = i
+						return m, m.onTabSwitch(prevTab, m.ActiveTab)
+					}
+					break
+				}
+				offset += tabWidth
+			}
+		}
+		return m, nil
+
+	case tea.MouseWheelMsg:
+		if m.ActiveTab == 3 {
+			var cmd tea.Cmd
+			m.Player, cmd = m.Player.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+
 	case tea.KeyPressMsg:
 		browseInputActive := m.ActiveTab == 2 && m.Browse.InputFocused()
 
@@ -307,6 +334,7 @@ func (m MainModel) View() tea.View {
 	v := tea.NewView(view)
 	v.WindowTitle = fmt.Sprintf("timbre \u2014 %s", m.Tabs[m.ActiveTab])
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 

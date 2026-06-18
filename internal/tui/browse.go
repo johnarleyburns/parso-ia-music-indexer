@@ -286,6 +286,8 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 
 func (m BrowseModel) handleInputKey(msg tea.KeyPressMsg) (BrowseModel, tea.Cmd) {
 	switch msg.String() {
+	case "ctrl+t":
+		return m.toggleMode()
 	case "tab":
 		m.inputFocused = false
 		m.searchInput.Blur()
@@ -341,24 +343,8 @@ func (m BrowseModel) handleTableKey(msg tea.KeyPressMsg) (BrowseModel, tea.Cmd) 
 		}
 		return m, nil
 
-	case "m":
-		if m.similarityMode {
-			return m, nil
-		}
-		if m.mode == ModeAlbums {
-			m.mode = ModeTracks
-			m.loaded = false
-			m.searchInput.Placeholder = "Search tracks..."
-			m.lastQuery = m.searchInput.Value()
-			return m, m.doTrackSearch(m.searchInput.Value())
-		} else if m.mode == ModeTracks {
-			m.mode = ModeAlbums
-			m.loaded = false
-			m.searchInput.Placeholder = "Search albums..."
-			m.lastQuery = m.searchInput.Value()
-			return m, m.doAlbumSearch(m.searchInput.Value())
-		}
-		return m, nil
+	case "m", "ctrl+t":
+		return m.toggleMode()
 
 	case "enter", "right":
 		return m.handleEnter()
@@ -499,6 +485,24 @@ func (m BrowseModel) handleSimilar() (BrowseModel, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m BrowseModel) toggleMode() (BrowseModel, tea.Cmd) {
+	if m.similarityMode || m.mode == ModeAlbumDetail {
+		return m, nil
+	}
+	if m.mode == ModeAlbums {
+		m.mode = ModeTracks
+		m.loaded = false
+		m.searchInput.Placeholder = "Search tracks..."
+		m.lastQuery = m.searchInput.Value()
+		return m, m.doTrackSearch(m.searchInput.Value())
+	}
+	m.mode = ModeAlbums
+	m.loaded = false
+	m.searchInput.Placeholder = "Search albums..."
+	m.lastQuery = m.searchInput.Value()
+	return m, m.doAlbumSearch(m.searchInput.Value())
 }
 
 func (m BrowseModel) doModeSearch(query string) tea.Cmd {
@@ -728,18 +732,22 @@ func (m BrowseModel) emptyMessage(style lipgloss.Style) string {
 
 func (m BrowseModel) buildHints(style lipgloss.Style) string {
 	if m.inputFocused {
-		return style.Render("  [\u2191\u2193] navigate table  [enter] focus table  [tab/esc] focus table")
+		modeLabel := "tracks"
+		if m.mode == ModeTracks {
+			modeLabel = "albums"
+		}
+		return style.Render(fmt.Sprintf("  [\u2191\u2193] navigate  [esc] table  [ctrl+t] %s", modeLabel))
 	}
 	if m.similarityMode {
 		return style.Render("  [\u2190/esc] back  [\u2192/enter/p] play  [\u2191\u2193] navigate")
 	}
 	switch m.mode {
 	case ModeAlbums:
-		return style.Render("  [\u2192/enter] view album  [m] tracks  [/] search  [\u2191\u2193] navigate")
+		return style.Render("  [\u2192/enter] view album  [m/ctrl+t] tracks  [/] search  [\u2191\u2193] navigate")
 	case ModeAlbumDetail:
 		return style.Render("  [\u2192/enter/p] play  [v] similar  [\u2190/esc] back  [\u2191\u2193] navigate")
 	case ModeTracks:
-		return style.Render("  [\u2192/enter/p] play  [a] album  [v] similar  [m] albums  [/] search  [\u2191\u2193] navigate")
+		return style.Render("  [\u2192/enter/p] play  [a] album  [v] similar  [m/ctrl+t] albums  [/] search  [\u2191\u2193] navigate")
 	}
 	return ""
 }

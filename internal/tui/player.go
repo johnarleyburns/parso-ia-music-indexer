@@ -78,6 +78,7 @@ type PlayerModel struct {
 	trackCollection string
 	trackCreator    string
 	similarTracks   []db.SimilarTrack
+	similarCursor   int
 }
 
 func NewPlayerModel(sqlDB *sql.DB, artCache *ArtCache) PlayerModel {
@@ -197,6 +198,22 @@ func (m PlayerModel) Update(msg tea.Msg) (PlayerModel, tea.Cmd) {
 		m.Height = msg.Height
 		return m, nil
 
+	case tea.MouseWheelMsg:
+		if msg.Button == tea.MouseWheelUp {
+			m.volumeLevel += 0.05
+			if m.volumeLevel > 1.0 {
+				m.volumeLevel = 1.0
+			}
+			m.engine.SetVolume(m.volumeLevel)
+		} else if msg.Button == tea.MouseWheelDown {
+			m.volumeLevel -= 0.05
+			if m.volumeLevel < 0.0 {
+				m.volumeLevel = 0.0
+			}
+			m.engine.SetVolume(m.volumeLevel)
+		}
+		return m, nil
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -206,7 +223,7 @@ func (m PlayerModel) Update(msg tea.Msg) (PlayerModel, tea.Cmd) {
 
 func (m PlayerModel) handleKey(msg tea.KeyPressMsg) (PlayerModel, tea.Cmd) {
 	switch msg.String() {
-	case " ":
+	case " ", "space":
 		if m.state == StatePlaying {
 			m.engine.TogglePause()
 			m.state = StatePaused
@@ -309,6 +326,27 @@ func (m PlayerModel) handleKey(msg tea.KeyPressMsg) (PlayerModel, tea.Cmd) {
 			m.currentIdx = 0
 		} else if m.currentIdx < len(m.queue) {
 			m.queue = m.queue[:m.currentIdx+1]
+		}
+		return m, nil
+
+	case "j":
+		if len(m.similarTracks) > 0 && m.similarCursor < len(m.similarTracks)-1 {
+			m.similarCursor++
+		}
+		return m, nil
+
+	case "k":
+		if m.similarCursor > 0 {
+			m.similarCursor--
+		}
+		return m, nil
+
+	case "enter":
+		if len(m.similarTracks) > 0 && m.similarCursor < len(m.similarTracks) {
+			t := m.similarTracks[m.similarCursor]
+			return m, func() tea.Msg {
+				return SwitchToPlayerMsg{TrackID: t.TrackID, Title: t.Title, AlbumID: t.AlbumID}
+			}
 		}
 		return m, nil
 	}
@@ -415,6 +453,7 @@ func (m *PlayerModel) clearStats() {
 	m.trackCollection = ""
 	m.trackCreator = ""
 	m.similarTracks = nil
+	m.similarCursor = 0
 }
 
 func (m PlayerModel) View() tea.View {
@@ -570,22 +609,35 @@ func (m PlayerModel) View() tea.View {
 
 		if len(m.similarTracks) > 0 {
 			b.WriteString(PanelTitleStyle.Render("Similar Tracks"))
-			b.WriteString("\n\n")
+			b.WriteString("  ")
+			b.WriteString(mutedStyle.Render("[j/k] navigate  [enter] play"))
+			b.WriteString("\n")
+			headerStyle := lipgloss.NewStyle().Foreground(Secondary).Bold(true)
+			b.WriteString(headerStyle.Render(fmt.Sprintf("       %-30s  %-20s  %7s  %8s", "Track", "Album", "Quality", "Distance")))
+			b.WriteString("\n")
+			selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff")).Background(Primary)
 			for i, t := range m.similarTracks {
-				num := fmt.Sprintf("  %2d. ", i+1)
-				b.WriteString(mutedStyle.Render(num))
-				b.WriteString(textStyle.Render(truncateStr(t.Title, 30)))
-				b.WriteString("  ")
-				b.WriteString(mutedStyle.Render(truncateStr(t.AlbumID, 20)))
-				b.WriteString("  ")
-				b.WriteString(mutedStyle.Render(fmt.Sprintf("q:%.3f  d:%.4f", t.QualityScore, t.Distance)))
+				if i == m.similarCursor {
+					line := fmt.Sprintf(" \u25b8 %2d. %-30s  %-20s  %7.3f  %8.4f",
+						i+1, truncateStr(t.Title, 30), truncateStr(t.AlbumID, 20), t.QualityScore, t.Distance)
+					b.WriteString(selectedStyle.Render(line))
+				} else {
+					b.WriteString(mutedStyle.Render(fmt.Sprintf("   %2d. ", i+1)))
+					b.WriteString(textStyle.Render(fmt.Sprintf("%-30s", truncateStr(t.Title, 30))))
+					b.WriteString("  ")
+					b.WriteString(mutedStyle.Render(fmt.Sprintf("%-20s", truncateStr(t.AlbumID, 20))))
+					b.WriteString("  ")
+					b.WriteString(mutedStyle.Render(fmt.Sprintf("%7.3f", t.QualityScore)))
+					b.WriteString("  ")
+					b.WriteString(mutedStyle.Render(fmt.Sprintf("%8.4f", t.Distance)))
+				}
 				b.WriteString("\n")
 			}
 			b.WriteString("\n")
 		}
 	}
 
-	hints := "  [space] play/pause  [s] stop  [b/<] prev  [n/>] next  [\u2190/\u2192] seek \u00b15s  [\u2191/\u2193] vol  [a] album  [c] clear"
+	hints := "  [space] play/pause  [s] stop  [b/<] prev  [n/>] next  [\u2190/\u2192] seek  [\u2191/\u2193] vol  [a] album  [c] clear"
 	b.WriteString(mutedStyle.Render(hints))
 
 	content := b.String()
