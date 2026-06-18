@@ -17,10 +17,16 @@ type grpcCLAPClient struct {
 	client pb.CLAPEmbedderClient
 }
 
+const maxMsgSize = 50 * 1024 * 1024
+
 func NewGRPCClient(host string, port int) (CLAPClient, error) {
 	target := fmt.Sprintf("%s:%d", host, port)
 	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallSendMsgSize(maxMsgSize),
+			grpc.MaxCallRecvMsgSize(maxMsgSize),
+		),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("clap grpc dial: %w", err)

@@ -1,4 +1,4 @@
-.PHONY: build run headless clean proto test
+.PHONY: build run headless clean proto test test-sidecar
 
 build:
 	go build -o bin/timbre ./cmd/tui
@@ -11,6 +11,9 @@ headless: build
 
 test:
 	go test ./...
+
+test-sidecar:
+	cd python_sidecar && .venv/bin/python test_inference.py
 
 proto:
 	PATH="$$HOME/go/bin:$$PATH" protoc \

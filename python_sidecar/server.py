@@ -16,7 +16,7 @@ import grpc
 from concurrent import futures
 import numpy as np
 import torch
-from transformers import AutoProcessor, ClapAudioModel
+from transformers import AutoProcessor, ClapModel
 
 import clap_pb2
 import clap_pb2_grpc
@@ -29,7 +29,7 @@ class CLAPService(clap_pb2_grpc.CLAPEmbedderServicer):
     def __init__(self):
         print(f"Loading {MODEL_NAME} from Hugging Face...")
         self.processor = AutoProcessor.from_pretrained(MODEL_NAME)
-        self.model = ClapAudioModel.from_pretrained(MODEL_NAME)
+        self.model = ClapModel.from_pretrained(MODEL_NAME)
 
         if torch.backends.mps.is_available():
             self.device = torch.device("mps")
@@ -47,7 +47,7 @@ class CLAPService(clap_pb2_grpc.CLAPEmbedderServicer):
             audio_np = np.frombuffer(request.pcm_data, dtype=np.float32)
 
             inputs = self.processor(
-                audios=audio_np,
+                audio=audio_np,
                 sampling_rate=request.sample_rate,
                 return_tensors="pt",
             )
@@ -56,7 +56,7 @@ class CLAPService(clap_pb2_grpc.CLAPEmbedderServicer):
             with torch.no_grad():
                 audio_outputs = self.model.get_audio_features(**inputs)
 
-            embedding = audio_outputs.cpu().numpy().flatten().tolist()
+            embedding = audio_outputs.pooler_output.cpu().numpy().flatten().tolist()
             return clap_pb2.EmbeddingResponse(embedding=embedding)
 
         except Exception as e:
@@ -67,7 +67,14 @@ class CLAPService(clap_pb2_grpc.CLAPEmbedderServicer):
 
 
 def serve():
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
+    MAX_MSG = 50 * 1024 * 1024
+    server = grpc.server(
+        futures.ThreadPoolExecutor(max_workers=4),
+        options=[
+            ("grpc.max_receive_message_length", MAX_MSG),
+            ("grpc.max_send_message_length", MAX_MSG),
+        ],
+    )
     clap_pb2_grpc.add_CLAPEmbedderServicer_to_server(CLAPService(), server)
     server.add_insecure_port("[::]:50051")
     print("CLAP gRPC server starting on port 50051...")

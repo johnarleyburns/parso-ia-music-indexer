@@ -2,6 +2,7 @@ package clap
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -71,6 +72,7 @@ func EnsureSidecar(host string, port int, sidecarDir, logDir string, statusFn fu
 
 	statusFn("Waiting for CLAP model to load (this may take a minute on first run)...")
 
+	addr := fmt.Sprintf("%s:%d", host, port)
 	deadline := time.Now().Add(120 * time.Second)
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -81,9 +83,16 @@ func EnsureSidecar(host string, port int, sidecarDir, logDir string, statusFn fu
 			logFile.Close()
 			return nil, nil, fmt.Errorf("CLAP sidecar exited prematurely: %v (check %s/clap-sidecar.log)", waitErr, logDir)
 		case <-ticker.C:
-			if c, err := NewGRPCClient(host, port); err == nil {
-				statusFn(fmt.Sprintf("CLAP sidecar connected on %s:%d", host, port))
-				return &SidecarProcess{cmd: cmd, logFile: logFile, exited: exited}, c, nil
+			conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+			if err == nil {
+				conn.Close()
+				statusFn("CLAP sidecar port open, connecting gRPC client...")
+				c, err := NewGRPCClient(host, port)
+				if err == nil {
+					statusFn(fmt.Sprintf("CLAP sidecar connected on %s:%d", host, port))
+					return &SidecarProcess{cmd: cmd, logFile: logFile, exited: exited}, c, nil
+				}
+				statusFn(fmt.Sprintf("gRPC probe failed (retrying): %v", err))
 			}
 		}
 	}
