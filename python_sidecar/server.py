@@ -23,6 +23,19 @@ import clap_pb2_grpc
 
 
 MODEL_NAME = "laion/clap-htsat-fused"
+TARGET_SAMPLE_RATE = 48000
+
+
+def resample(audio, src_rate, dst_rate):
+    if src_rate == dst_rate:
+        return audio
+    duration = len(audio) / src_rate
+    n_samples = int(duration * dst_rate)
+    return np.interp(
+        np.linspace(0, len(audio) - 1, n_samples),
+        np.arange(len(audio)),
+        audio,
+    ).astype(np.float32)
 
 
 class CLAPService(clap_pb2_grpc.CLAPEmbedderServicer):
@@ -45,10 +58,11 @@ class CLAPService(clap_pb2_grpc.CLAPEmbedderServicer):
     def GetEmbedding(self, request, context):
         try:
             audio_np = np.frombuffer(request.pcm_data, dtype=np.float32)
+            audio_np = resample(audio_np, request.sample_rate, TARGET_SAMPLE_RATE)
 
             inputs = self.processor(
                 audio=audio_np,
-                sampling_rate=request.sample_rate,
+                sampling_rate=TARGET_SAMPLE_RATE,
                 return_tensors="pt",
             )
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
