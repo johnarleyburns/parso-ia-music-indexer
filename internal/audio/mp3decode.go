@@ -8,16 +8,23 @@ import (
 	"github.com/hajimehoshi/go-mp3"
 )
 
-func DecodeMP3(data []byte) ([]float64, int, error) {
+func DecodeMP3(data []byte) (samples []float64, sampleRate int, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			samples = nil
+			sampleRate = 0
+			err = fmt.Errorf("mp3 decode panic: %v", r)
+		}
+	}()
+
 	reader := bytes.NewReader(data)
-	decoder, err := mp3.NewDecoder(reader)
-	if err != nil {
-		return nil, 0, fmt.Errorf("mp3 init: %w", err)
+	decoder, decErr := mp3.NewDecoder(reader)
+	if decErr != nil {
+		return nil, 0, fmt.Errorf("mp3 init: %w", decErr)
 	}
 
-	sampleRate := decoder.SampleRate()
+	sampleRate = decoder.SampleRate()
 
-	var samples []float64
 	buf := make([]byte, 4096)
 	for {
 		n, err := decoder.Read(buf)

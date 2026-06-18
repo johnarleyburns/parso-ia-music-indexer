@@ -87,7 +87,7 @@ func NewMainModel(cfg *config.Config, sqlDB *sql.DB, events chan ActivityEvent, 
 		Dashboard: NewDashboardModel(sqlDB),
 		LiveLog:   NewLiveLogModel(),
 		Browse:    NewBrowseModel(sqlDB, artCache),
-		Player:    NewPlayerModel(sqlDB),
+		Player:    NewPlayerModel(sqlDB, artCache),
 		Help:      help.New(),
 		Keys:      keys,
 	}
@@ -164,6 +164,9 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "W":
 				m.Controls <- ControlCmd{Action: CmdRemoveWorker}
 				return m, nil
+			case "F":
+				m.Controls <- ControlCmd{Action: CmdResetFailed}
+				return m, nil
 			}
 		}
 
@@ -197,10 +200,16 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Dashboard, cmd = m.Dashboard.Update(msg)
 		return m, cmd
 
-	case browseSearchMsg, browseSimilarMsg, browseAlbumSearchMsg, browseAlbumDetailMsg, artLoadedMsg:
+	case browseSearchMsg, browseSimilarMsg, browseAlbumSearchMsg, browseAlbumDetailMsg:
 		var cmd tea.Cmd
 		m.Browse, cmd = m.Browse.Update(msg)
 		return m, cmd
+
+	case artLoadedMsg:
+		var cmd1, cmd2 tea.Cmd
+		m.Browse, cmd1 = m.Browse.Update(msg)
+		m.Player, cmd2 = m.Player.Update(msg)
+		return m, tea.Batch(cmd1, cmd2)
 
 	case playerLoadedMsg, playerErrorMsg, playerTickMsg, playerDoneMsg:
 		var cmd tea.Cmd

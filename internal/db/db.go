@@ -100,6 +100,7 @@ func (db *DB) migrate() error {
 	}
 
 	db.Conn.Exec(`ALTER TABLE albums ADD COLUMN downloads INTEGER NOT NULL DEFAULT 0`)
+	db.Conn.Exec(`ALTER TABLE albums ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0`)
 
 	return nil
 }

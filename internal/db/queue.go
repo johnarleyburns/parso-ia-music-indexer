@@ -336,6 +336,64 @@ func ResetStuckTracks(db *sql.DB, maxAge time.Duration) (int64, error) {
 	return result.RowsAffected()
 }
 
+func RequeueTrackForRetry(db *sql.DB, trackID int, maxRetries int, errMsg string) (bool, error) {
+	var retryCount int
+	err := db.QueryRow(`SELECT retry_count FROM tracks WHERE id = ?`, trackID).Scan(&retryCount)
+	if err != nil {
+		return false, err
+	}
+	if retryCount >= maxRetries {
+		return false, MarkTrackFailed(db, trackID, errMsg)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = db.Exec(
+		`UPDATE tracks SET status='pending', worker_id=NULL, locked_at=NULL, retry_count=retry_count+1, error_message=?, updated_at=? WHERE id=?`,
+		errMsg, now, trackID,
+	)
+	return err == nil, err
+}
+
+func RequeueAlbumForRetry(db *sql.DB, identifier string, maxRetries int, errMsg string) (bool, error) {
+	var retryCount int
+	err := db.QueryRow(`SELECT retry_count FROM albums WHERE ia_identifier = ?`, identifier).Scan(&retryCount)
+	if err != nil {
+		return false, err
+	}
+	if retryCount >= maxRetries {
+		return false, MarkAlbumFailed(db, identifier, errMsg)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = db.Exec(
+		`UPDATE albums SET status='pending', retry_count=retry_count+1, error_message=?, updated_at=? WHERE ia_identifier=?`,
+		errMsg, now, identifier,
+	)
+	return err == nil, err
+}
+
+func ResetAllFailed(db *sql.DB) (int64, int64, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	albumResult, err := db.Exec(
+		`UPDATE albums SET status='pending', error_message=NULL, retry_count=0, updated_at=? WHERE status='failed'`,
+		now,
+	)
+	if err != nil {
+		return 0, 0, err
+	}
+	albumCount, _ := albumResult.RowsAffected()
+
+	trackResult, err := db.Exec(
+		`UPDATE tracks SET status='pending', error_message=NULL, worker_id=NULL, locked_at=NULL, retry_count=0, updated_at=? WHERE status='failed'`,
+		now,
+	)
+	if err != nil {
+		return albumCount, 0, err
+	}
+	trackCount, _ := trackResult.RowsAffected()
+
+	return albumCount, trackCount, nil
+}
+
 func GetPendingTrackCount(db *sql.DB) (int, error) {
 	var count int
 	err := db.QueryRow(`SELECT count(*) FROM tracks WHERE status='pending'`).Scan(&count)

@@ -9,6 +9,7 @@ const (
 	CmdRemoveResolver   ControlAction = "remove_resolver"
 	CmdAddWorker        ControlAction = "add_worker"
 	CmdRemoveWorker     ControlAction = "remove_worker"
+	CmdResetFailed      ControlAction = "reset_failed"
 	CmdShutdown         ControlAction = "shutdown"
 )
 

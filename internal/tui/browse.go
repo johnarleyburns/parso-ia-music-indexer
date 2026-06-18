@@ -177,8 +177,8 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 				qs,
 			}
 		}
-		m.table.SetColumns(albumColumns())
 		m.table.SetRows(rows)
+		m.table.SetColumns(albumColumns())
 		m.table.GotoTop()
 		m.loaded = true
 		m.lastCursor = 0
@@ -207,8 +207,8 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 			}
 			rows[i] = table.Row{num, t.Title, qs, t.Status}
 		}
-		m.table.SetColumns(albumDetailColumns())
 		m.table.SetRows(rows)
+		m.table.SetColumns(albumDetailColumns())
 		m.table.GotoTop()
 		m.inputFocused = false
 		m.searchInput.Blur()
@@ -227,8 +227,8 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 		for i, t := range msg.Tracks {
 			rows[i] = table.Row{t.Title, t.AlbumTitle, fmt.Sprintf("%.3f", t.QualityScore)}
 		}
-		m.table.SetColumns(trackColumns())
 		m.table.SetRows(rows)
+		m.table.SetColumns(trackColumns())
 		m.table.GotoTop()
 		m.loaded = true
 		return m, nil
@@ -244,8 +244,8 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 		for i, t := range msg.Tracks {
 			rows[i] = table.Row{t.Title, t.AlbumID, fmt.Sprintf("%.3f", t.QualityScore), fmt.Sprintf("%.4f", t.Distance)}
 		}
-		m.table.SetColumns(similarColumns())
 		m.table.SetRows(rows)
+		m.table.SetColumns(similarColumns())
 		m.table.GotoTop()
 		return m, nil
 
@@ -288,6 +288,13 @@ func (m BrowseModel) handleInputKey(msg tea.KeyPressMsg) (BrowseModel, tea.Cmd) 
 		m.searchInput.Blur()
 		m.table.Focus()
 		return m, nil
+	case "up", "down":
+		m.inputFocused = false
+		m.searchInput.Blur()
+		m.table.Focus()
+		var cmd tea.Cmd
+		m.table, cmd = m.table.Update(msg)
+		return m, cmd
 	}
 
 	prevVal := m.searchInput.Value()
@@ -340,7 +347,7 @@ func (m BrowseModel) handleTableKey(msg tea.KeyPressMsg) (BrowseModel, tea.Cmd) 
 		}
 		return m, nil
 
-	case "enter":
+	case "enter", "right":
 		return m.handleEnter()
 
 	case "p":
@@ -358,7 +365,7 @@ func (m BrowseModel) handleTableKey(msg tea.KeyPressMsg) (BrowseModel, tea.Cmd) 
 	case "v":
 		return m.handleSimilar()
 
-	case "esc":
+	case "esc", "left":
 		if m.similarityMode {
 			m.similarityMode = false
 			m.similarSource = 0
@@ -711,18 +718,18 @@ func (m BrowseModel) emptyMessage(style lipgloss.Style) string {
 
 func (m BrowseModel) buildHints(style lipgloss.Style) string {
 	if m.inputFocused {
-		return style.Render("  [tab/esc] focus table  [enter] focus table")
+		return style.Render("  [\u2191\u2193] navigate table  [enter] focus table  [tab/esc] focus table")
 	}
 	if m.similarityMode {
-		return style.Render("  [esc] back  [enter/p] play  [\u2191\u2193] navigate")
+		return style.Render("  [\u2190/esc] back  [\u2192/enter/p] play  [\u2191\u2193] navigate")
 	}
 	switch m.mode {
 	case ModeAlbums:
-		return style.Render("  [enter] view album  [m] switch to tracks  [tab//] search  [\u2191\u2193] navigate")
+		return style.Render("  [\u2192/enter] view album  [m] tracks  [/] search  [\u2191\u2193] navigate")
 	case ModeAlbumDetail:
-		return style.Render("  [enter/p] play  [v] similar  [esc] back  [\u2191\u2193] navigate")
+		return style.Render("  [\u2192/enter/p] play  [v] similar  [\u2190/esc] back  [\u2191\u2193] navigate")
 	case ModeTracks:
-		return style.Render("  [enter/p] play  [a] view album  [v] similar  [m] switch to albums  [tab//] search  [\u2191\u2193] navigate")
+		return style.Render("  [\u2192/enter/p] play  [a] album  [v] similar  [m] albums  [/] search  [\u2191\u2193] navigate")
 	}
 	return ""
 }

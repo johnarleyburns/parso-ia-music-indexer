@@ -299,7 +299,7 @@ func (m DashboardModel) buildCoordinatorSection(sectionTitle func(string) string
 
 	s += fmt.Sprintf("  Status: %s\n", status)
 	s += mutedStyle.Render(fmt.Sprintf("  Indexed: %d  |  Cursor: %s\n", m.CoordIndexedCount, cursorDisplay))
-	s += mutedStyle.Render("  [s] start  [x] stop")
+	s += mutedStyle.Render("  [s] start  [x] stop  [F] reset failed")
 
 	return s
 }
