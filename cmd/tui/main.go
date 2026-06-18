@@ -47,7 +47,7 @@ func isTransientError(errMsg string) bool {
 	return false
 }
 
-func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent, controls <-chan tui.ControlCmd) {
+func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent, controls <-chan tui.ControlCmd, metrics *tui.Metrics) {
 	coordRunning := false
 	coordStopCh := make(chan struct{})
 
@@ -62,6 +62,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 	dbMu := &sync.Mutex{}
 	clapClient := clap.NewMockClient()
 	iaClient := ia.NewClient(60 * time.Second)
+	iaClient.Transport = tui.NewInstrumentedTransport(metrics)
 	metaLimiter := ratelimit.NewLimiter(cfg.IAApiRate)
 
 	stuckTicker := time.NewTicker(5 * time.Minute)
@@ -89,7 +90,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 						Timestamp: time.Now(),
 						Message:   "Coordinator started (album discovery)",
 					}
-					go coordinatorLoop(cfg, sqlDB, events, coordStopCh)
+					go coordinatorLoop(cfg, sqlDB, events, coordStopCh, metrics)
 				}
 			case tui.CmdStopCoordinator:
 				if coordRunning {
@@ -115,7 +116,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 					WorkerID:   rID,
 					Message:    fmt.Sprintf("Resolver %s started (pool: %d)", rID, resolverCount),
 				}
-				go albumResolverLoop(sqlDB, events, stopCh, dbMu, iaClient, metaLimiter, rID)
+				go albumResolverLoop(sqlDB, events, stopCh, dbMu, iaClient, metaLimiter, rID, metrics)
 			case tui.CmdRemoveResolver:
 				if resolverCount > 0 {
 					resolverCount--
@@ -144,7 +145,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 					WorkerID:   wID,
 					Message:    fmt.Sprintf("Analyzer %s started (pool: %d)", wID, workerCount),
 				}
-				go workerLoop(cfg, sqlDB, events, stopCh, dbMu, clapClient, iaClient, wID)
+				go workerLoop(cfg, sqlDB, events, stopCh, dbMu, clapClient, iaClient, wID, metrics)
 			case tui.CmdRemoveWorker:
 				if workerCount > 0 {
 					workerCount--
@@ -207,8 +208,9 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 	}
 }
 
-func coordinatorLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{}) {
+func coordinatorLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{}, metrics *tui.Metrics) {
 	client := ia.NewClient(60 * time.Second)
+	client.Transport = tui.NewInstrumentedTransport(metrics)
 	limiter := ratelimit.NewLimiter(cfg.IAApiRate)
 
 	query := os.Getenv("IA_QUERY")
@@ -372,7 +374,7 @@ func coordinatorLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activit
 }
 
 func albumResolverLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
-	dbMu *sync.Mutex, iaClient *http.Client, metaLimiter *ratelimit.Limiter, resolverID string) {
+	dbMu *sync.Mutex, iaClient *http.Client, metaLimiter *ratelimit.Limiter, resolverID string, metrics *tui.Metrics) {
 	for {
 		select {
 		case <-stopCh:
@@ -400,7 +402,7 @@ func albumResolverLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-c
 			continue
 		}
 
-		resolveAlbum(sqlDB, events, dbMu, iaClient, metaLimiter, resolverID, albumID)
+		resolveAlbum(sqlDB, events, dbMu, iaClient, metaLimiter, resolverID, albumID, metrics)
 	}
 }
 
@@ -416,7 +418,7 @@ func main() {
 }
 
 func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
-	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string) {
+	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, metrics *tui.Metrics) {
 	batchSize := 2
 
 	for {
@@ -448,7 +450,7 @@ func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEven
 					return
 				default:
 				}
-				analyzeTrack(cfg, sqlDB, events, dbMu, clapClient, iaClient, workerID, track)
+				analyzeTrack(cfg, sqlDB, events, dbMu, clapClient, iaClient, workerID, track, metrics)
 			}
 			continue
 		}
@@ -458,7 +460,7 @@ func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEven
 }
 
 func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent,
-	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, track db.ClaimedTrack) {
+	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, track db.ClaimedTrack, metrics *tui.Metrics) {
 
 	trackLabel := track.Title
 	if trackLabel == "" {
@@ -608,10 +610,11 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 		Message:      fmt.Sprintf("[%s] Complete %s (quality: %.2f)", workerID, trackLabel, compositeScore),
 		QualityScore: compositeScore,
 	}
+	metrics.RecordAnalyzerCompletion()
 }
 
 func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, dbMu *sync.Mutex,
-	iaClient *http.Client, metaLimiter *ratelimit.Limiter, workerID, albumID string) {
+	iaClient *http.Client, metaLimiter *ratelimit.Limiter, workerID, albumID string, metrics *tui.Metrics) {
 
 	events <- tui.ActivityEvent{
 		Type:       tui.EventAlbumResolving,
@@ -769,6 +772,7 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, dbMu *sync.Mute
 		Message:    fmt.Sprintf("[%s] Resolved %s: %q — %d tracks", workerID, albumID, album.Title, inserted),
 		TrackCount: inserted,
 	}
+	metrics.RecordResolverCompletion()
 }
 
 func sleepOrStop(d time.Duration, stopCh <-chan struct{}) {
@@ -788,12 +792,13 @@ func runTUI(cfg *config.Config) {
 
 	artDir := filepath.Join(filepath.Dir(cfg.DBPath), "art")
 	artCache := tui.NewArtCache(artDir)
+	metrics := tui.NewMetrics()
 
 	events := tui.NewEventChannel()
 	controls := tui.NewControlChannel()
-	go runCoordinator(cfg, sqlDB, events, controls)
+	go runCoordinator(cfg, sqlDB, events, controls, metrics)
 
-	m := tui.NewMainModel(cfg, sqlDB.Conn, events, controls, artCache)
+	m := tui.NewMainModel(cfg, sqlDB.Conn, events, controls, artCache, metrics, cfg.DBPath, artDir)
 	p := tea.NewProgram(m)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -848,7 +853,8 @@ func runHeadless(cfg *config.Config) {
 
 	events := tui.NewEventChannel()
 	controls := tui.NewControlChannel()
-	go runCoordinator(cfg, sqlDB, events, controls)
+	metrics := tui.NewMetrics()
+	go runCoordinator(cfg, sqlDB, events, controls, metrics)
 
 	controls <- tui.ControlCmd{Action: tui.CmdStartCoordinator}
 

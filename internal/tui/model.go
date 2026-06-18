@@ -3,6 +3,7 @@ package tui
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/config"
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/tui/components"
@@ -50,6 +51,10 @@ var keys = keyMap{
 	),
 }
 
+type resourceTickMsg struct {
+	Stats ResourceStats
+}
+
 type MainModel struct {
 	Config    *config.Config
 	Tabs      []string
@@ -61,6 +66,10 @@ type MainModel struct {
 	Controls chan ControlCmd
 
 	ArtCache *ArtCache
+	Metrics  *Metrics
+	DBPath   string
+	ArtDir   string
+	Resources ResourceStats
 
 	Dashboard DashboardModel
 	LiveLog   LiveLogModel
@@ -75,7 +84,7 @@ type MainModel struct {
 	Ready  bool
 }
 
-func NewMainModel(cfg *config.Config, sqlDB *sql.DB, events chan ActivityEvent, controls chan ControlCmd, artCache *ArtCache) MainModel {
+func NewMainModel(cfg *config.Config, sqlDB *sql.DB, events chan ActivityEvent, controls chan ControlCmd, artCache *ArtCache, metrics *Metrics, dbPath, artDir string) MainModel {
 	return MainModel{
 		Config:    cfg,
 		Tabs:      []string{"Dashboard", "Live Log", "Browse", "Player"},
@@ -84,6 +93,9 @@ func NewMainModel(cfg *config.Config, sqlDB *sql.DB, events chan ActivityEvent, 
 		Events:    events,
 		Controls:  controls,
 		ArtCache:  artCache,
+		Metrics:   metrics,
+		DBPath:    dbPath,
+		ArtDir:    artDir,
 		Dashboard: NewDashboardModel(sqlDB),
 		LiveLog:   NewLiveLogModel(),
 		Browse:    NewBrowseModel(sqlDB, artCache),
@@ -97,6 +109,7 @@ func (m MainModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.Dashboard.Init(),
 		waitForActivityEvent(m.Events),
+		m.resourceTick(),
 	)
 }
 
@@ -200,6 +213,10 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Dashboard, cmd = m.Dashboard.Update(msg)
 		return m, cmd
 
+	case resourceTickMsg:
+		m.Resources = msg.Stats
+		return m, m.resourceTick()
+
 	case browseSearchMsg, browseSimilarMsg, browseAlbumSearchMsg, browseAlbumDetailMsg:
 		var cmd tea.Cmd
 		m.Browse, cmd = m.Browse.Update(msg)
@@ -254,7 +271,10 @@ func (m MainModel) View() tea.View {
 	helpView := m.Help.View(m.Keys)
 	helpHeight := lipgloss.Height(helpView)
 
-	contentHeight := m.Height - lipgloss.Height(tabBar.View()) - helpHeight - 1
+	statusBar := RenderStatusBar(m.Metrics, m.Dashboard.Stats, m.Resources, m.Width)
+	statusHeight := lipgloss.Height(statusBar)
+
+	contentHeight := m.Height - lipgloss.Height(tabBar.View()) - helpHeight - statusHeight - 1
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
@@ -267,13 +287,22 @@ func (m MainModel) View() tea.View {
 		lipgloss.Left,
 		tabBar.View(),
 		panelStyle.Render(content),
+		statusBar,
 		helpView,
 	)
 
 	v := tea.NewView(view)
-	v.WindowTitle = fmt.Sprintf("timbre — %s", m.Tabs[m.ActiveTab])
+	v.WindowTitle = fmt.Sprintf("timbre \u2014 %s", m.Tabs[m.ActiveTab])
 	v.AltScreen = true
 	return v
+}
+
+func (m MainModel) resourceTick() tea.Cmd {
+	dbPath := m.DBPath
+	artDir := m.ArtDir
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+		return resourceTickMsg{Stats: ComputeResourceStats(dbPath, artDir)}
+	})
 }
 
 func (m *MainModel) onTabSwitch(from, to int) tea.Cmd {
