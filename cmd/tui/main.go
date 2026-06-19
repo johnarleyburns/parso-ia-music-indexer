@@ -25,7 +25,6 @@ import (
 )
 
 const (
-	maxTrackRetries = 3
 	maxAlbumRetries = 3
 	stuckTrackAge   = 10 * time.Minute
 )
@@ -456,12 +455,39 @@ func main() {
 func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
 	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, metrics *tui.Metrics) {
 	batchSize := 2
+	consecutiveFailures := 0
+	const maxConsecutiveFailures = 5
 
 	for {
 		select {
 		case <-stopCh:
 			return
 		default:
+		}
+
+		if consecutiveFailures >= maxConsecutiveFailures {
+			events <- tui.ActivityEvent{
+				Type:      tui.EventWorkerStopped,
+				Timestamp: time.Now(),
+				WorkerID:  workerID,
+				Message:   fmt.Sprintf("[%s] Stopped: %d consecutive transient failures (possible rate limiting)", workerID, consecutiveFailures),
+				Error:     fmt.Sprintf("%d consecutive failures", consecutiveFailures),
+			}
+			return
+		}
+
+		if consecutiveFailures > 0 {
+			backoff := time.Duration(1<<uint(consecutiveFailures-1)) * 5 * time.Second
+			if backoff > 80*time.Second {
+				backoff = 80 * time.Second
+			}
+			events <- tui.ActivityEvent{
+				Type:      tui.EventInfo,
+				Timestamp: time.Now(),
+				WorkerID:  workerID,
+				Message:   fmt.Sprintf("[%s] Backing off %s after %d consecutive failures", workerID, backoff, consecutiveFailures),
+			}
+			sleepOrStop(backoff, stopCh)
 		}
 
 		dbMu.Lock()
@@ -475,7 +501,7 @@ func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEven
 				Message:   fmt.Sprintf("Claim track batch error: %v", err),
 				Error:     err.Error(),
 			}
-			sleepOrStop(5*time.Second, stopCh)
+			consecutiveFailures++
 			continue
 		}
 
@@ -486,7 +512,13 @@ func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEven
 					return
 				default:
 				}
-				analyzeTrack(cfg, sqlDB, events, dbMu, clapClient, iaClient, workerID, track, metrics)
+				ok := analyzeTrack(cfg, sqlDB, events, dbMu, clapClient, iaClient, workerID, track, metrics)
+				if ok {
+					consecutiveFailures = 0
+				} else {
+					consecutiveFailures++
+					break
+				}
 			}
 			continue
 		}
@@ -496,7 +528,7 @@ func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEven
 }
 
 func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent,
-	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, track db.ClaimedTrack, metrics *tui.Metrics) {
+	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, track db.ClaimedTrack, metrics *tui.Metrics) bool {
 
 	trackLabel := track.Title
 	if trackLabel == "" {
@@ -517,27 +549,17 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	if err != nil {
 		errMsg := fmt.Sprintf("stream: %v", err)
 		dbMu.Lock()
-		requeued, _ := db.RequeueTrackForRetry(sqlDB.Conn, track.ID, maxTrackRetries, errMsg)
+		db.MarkTrackFailed(sqlDB.Conn, track.ID, errMsg)
 		dbMu.Unlock()
-		if requeued {
-			events <- tui.ActivityEvent{
-				Type:       tui.EventInfo,
-				Timestamp:  time.Now(),
-				Identifier: trackLabel,
-				WorkerID:   workerID,
-				Message:    fmt.Sprintf("[%s] Retry queued %s: %v", workerID, trackLabel, err),
-			}
-		} else {
-			events <- tui.ActivityEvent{
-				Type:       tui.EventAnalysisFailed,
-				Timestamp:  time.Now(),
-				Identifier: trackLabel,
-				WorkerID:   workerID,
-				Message:    fmt.Sprintf("[%s] Failed %s: %v", workerID, trackLabel, err),
-				Error:      err.Error(),
-			}
+		events <- tui.ActivityEvent{
+			Type:       tui.EventAnalysisFailed,
+			Timestamp:  time.Now(),
+			Identifier: trackLabel,
+			WorkerID:   workerID,
+			Message:    fmt.Sprintf("[%s] Failed %s: %v", workerID, trackLabel, err),
+			Error:      err.Error(),
 		}
-		return
+		return false
 	}
 
 	pcmSamples, sampleRate, err := audio.DecodeMP3(mp3Data)
@@ -563,7 +585,7 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 				Message:    fmt.Sprintf("[%s] Flagged album %s poor quality, skipped %d pending tracks", workerID, track.AlbumID, skipped),
 			}
 		}
-		return
+		return true
 	}
 
 	snrDB := audio.CalculateSNR(pcmSamples)
@@ -583,7 +605,7 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 			Message:      fmt.Sprintf("[%s] Low quality %s: score=%.3f", workerID, trackLabel, compositeScore),
 			QualityScore: compositeScore,
 		}
-		return
+		return true
 	}
 
 	mfccVec := audio.ComputeMFCCPool(pcmSamples, sampleRate)
@@ -596,53 +618,33 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	if err != nil {
 		errMsg := fmt.Sprintf("clap: %v", err)
 		dbMu.Lock()
-		requeued, _ := db.RequeueTrackForRetry(sqlDB.Conn, track.ID, maxTrackRetries, errMsg)
+		db.MarkTrackFailed(sqlDB.Conn, track.ID, errMsg)
 		dbMu.Unlock()
-		if requeued {
-			events <- tui.ActivityEvent{
-				Type:       tui.EventInfo,
-				Timestamp:  time.Now(),
-				Identifier: trackLabel,
-				WorkerID:   workerID,
-				Message:    fmt.Sprintf("[%s] Retry queued %s: %v", workerID, trackLabel, err),
-			}
-		} else {
-			events <- tui.ActivityEvent{
-				Type:       tui.EventAnalysisFailed,
-				Timestamp:  time.Now(),
-				Identifier: trackLabel,
-				WorkerID:   workerID,
-				Message:    fmt.Sprintf("[%s] CLAP error %s: %v", workerID, trackLabel, err),
-				Error:      err.Error(),
-			}
+		events <- tui.ActivityEvent{
+			Type:       tui.EventAnalysisFailed,
+			Timestamp:  time.Now(),
+			Identifier: trackLabel,
+			WorkerID:   workerID,
+			Message:    fmt.Sprintf("[%s] CLAP error %s: %v", workerID, trackLabel, err),
+			Error:      err.Error(),
 		}
-		return
+		return false
 	}
 
 	dbMu.Lock()
 	if err := db.SaveEmbedding(sqlDB.Conn, track.ID, clapVec, mfccVec, chromaVec, compositeScore); err != nil {
 		errMsg := fmt.Sprintf("save embedding: %v", err)
-		requeued, _ := db.RequeueTrackForRetry(sqlDB.Conn, track.ID, maxTrackRetries, errMsg)
+		db.MarkTrackFailed(sqlDB.Conn, track.ID, errMsg)
 		dbMu.Unlock()
-		if requeued {
-			events <- tui.ActivityEvent{
-				Type:       tui.EventInfo,
-				Timestamp:  time.Now(),
-				Identifier: trackLabel,
-				WorkerID:   workerID,
-				Message:    fmt.Sprintf("[%s] Retry queued %s: %v", workerID, trackLabel, err),
-			}
-		} else {
-			events <- tui.ActivityEvent{
-				Type:       tui.EventAnalysisFailed,
-				Timestamp:  time.Now(),
-				Identifier: trackLabel,
-				WorkerID:   workerID,
-				Message:    fmt.Sprintf("[%s] Save embedding error %s: %v", workerID, trackLabel, err),
-				Error:      err.Error(),
-			}
+		events <- tui.ActivityEvent{
+			Type:       tui.EventAnalysisFailed,
+			Timestamp:  time.Now(),
+			Identifier: trackLabel,
+			WorkerID:   workerID,
+			Message:    fmt.Sprintf("[%s] Save embedding error %s: %v", workerID, trackLabel, err),
+			Error:      err.Error(),
 		}
-		return
+		return false
 	}
 	db.MarkTrackCompleted(sqlDB.Conn, track.ID)
 	dbMu.Unlock()
@@ -656,6 +658,7 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 		QualityScore: compositeScore,
 	}
 	metrics.RecordAnalyzerCompletion()
+	return true
 }
 
 func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, dbMu *sync.Mutex,
