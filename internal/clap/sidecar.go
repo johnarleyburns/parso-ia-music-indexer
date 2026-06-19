@@ -72,7 +72,7 @@ func EnsureSidecar(host string, port int, sidecarDir, logDir string, statusFn fu
 
 	statusFn("Waiting for CLAP model to load (this may take a minute on first run)...")
 
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	deadline := time.Now().Add(120 * time.Second)
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
