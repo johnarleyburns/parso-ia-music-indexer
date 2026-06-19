@@ -3,6 +3,7 @@ package tui
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,8 +14,9 @@ import (
 )
 
 type statsRefreshMsg struct {
-	Stats *db.CombinedStats
-	Err   error
+	Stats      *db.CombinedStats
+	CollStats  *db.CollectionStats
+	Err        error
 }
 
 type workerState struct {
@@ -30,9 +32,12 @@ type DashboardModel struct {
 	Height int
 	Stats  *db.CombinedStats
 
-	CoordRunning      bool
-	CoordIndexedCount int
-	CoordCursor       string
+	CollectionStats       *db.CollectionStats
+	CoordRunning          bool
+	CoordCurrentCollection string
+	CoordCollectionIdx    int
+	CoordCollectionTotal  int
+	CoordAlbumsDiscovered int
 
 	ResolverCount  int
 	ResolverStates map[string]*workerState
@@ -45,14 +50,15 @@ type DashboardModel struct {
 
 func NewDashboardModel(sqlDB *sql.DB) DashboardModel {
 	return DashboardModel{
-		DB:             sqlDB,
-		Stats:          &db.CombinedStats{},
-		CoordRunning:   false,
-		ResolverCount:  0,
-		ResolverStates: make(map[string]*workerState),
-		AnalyzerCount:  0,
-		AnalyzerStates: make(map[string]*workerState),
-		Events:         make([]ActivityEvent, 0),
+		DB:              sqlDB,
+		Stats:           &db.CombinedStats{},
+		CollectionStats: &db.CollectionStats{},
+		CoordRunning:    false,
+		ResolverCount:   0,
+		ResolverStates:  make(map[string]*workerState),
+		AnalyzerCount:   0,
+		AnalyzerStates:  make(map[string]*workerState),
+		Events:          make([]ActivityEvent, 0),
 	}
 }
 
@@ -69,10 +75,14 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 	case statsRefreshMsg:
 		if msg.Err == nil {
 			m.Stats = msg.Stats
+			if msg.CollStats != nil {
+				m.CollectionStats = msg.CollStats
+			}
 		}
 		return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 			s, err := db.GetCombinedStats(m.DB)
-			return statsRefreshMsg{Stats: s, Err: err}
+			cs, _ := db.GetCollectionStats(m.DB)
+			return statsRefreshMsg{Stats: s, CollStats: cs, Err: err}
 		})
 
 	case ActivityEvent:
@@ -85,11 +95,19 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 			m.CoordRunning = true
 		case EventCoordStopped:
 			m.CoordRunning = false
+			m.CoordCurrentCollection = ""
 		case EventCoordProgress:
-			m.CoordIndexedCount = msg.Count
-			if msg.Cursor != "" {
-				m.CoordCursor = msg.Cursor
-			}
+			m.CoordAlbumsDiscovered = msg.Count
+			m.CoordCollectionTotal = msg.Total
+		case EventCollectionStarted:
+			m.CoordCurrentCollection = msg.CollectionID
+		case EventCollectionProgress:
+			m.CoordCurrentCollection = msg.CollectionID
+			m.CoordAlbumsDiscovered = msg.Count
+		case EventCollectionCompleted:
+			m.CoordCurrentCollection = ""
+		case EventCollectionFailed:
+			m.CoordCurrentCollection = ""
 		case EventWorkerStarted:
 			if msg.WorkerID != "" {
 				if isResolver(msg.WorkerID) {
@@ -181,6 +199,10 @@ func (m DashboardModel) View() tea.View {
 	if stats == nil {
 		stats = &db.CombinedStats{}
 	}
+	collStats := m.CollectionStats
+	if collStats == nil {
+		collStats = &db.CollectionStats{}
+	}
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7c3aed")).MarginBottom(1)
 	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#9ca3af"))
@@ -206,7 +228,16 @@ func (m DashboardModel) View() tea.View {
 		rightWidth = 25
 	}
 
-	albumPanel := panelBorder.Width(leftWidth / 2)
+	collPanel := panelBorder.Width(leftWidth)
+	collContent := lipgloss.NewStyle().Bold(true).Foreground(Secondary).Render("Collections") + "\n\n"
+	collContent += drawRow("Total:       ", fmt.Sprintf("%d", collStats.Total), valueStyle) + "\n"
+	collContent += drawRow("Pending:     ", fmt.Sprintf("%d", collStats.Pending), pendingStyle) + "\n"
+	collContent += drawRow("Discovering: ", fmt.Sprintf("%d", collStats.Discovering), processingStyle) + "\n"
+	collContent += drawRow("Discovered:  ", fmt.Sprintf("%d", collStats.Discovered), completeStyle) + "\n"
+	collContent += drawRow("Failed:      ", fmt.Sprintf("%d", collStats.Failed), failedStyle)
+
+	statsPanel := panelBorder.Width(leftWidth / 2)
+
 	albumContent := lipgloss.NewStyle().Bold(true).Foreground(Secondary).Render("Albums") + "\n\n"
 	albumContent += drawRow("Total:     ", fmt.Sprintf("%d", stats.Albums.Total), valueStyle) + "\n"
 	albumContent += drawRow("Pending:   ", fmt.Sprintf("%d", stats.Albums.Pending), pendingStyle) + "\n"
@@ -214,7 +245,6 @@ func (m DashboardModel) View() tea.View {
 	albumContent += drawRow("Resolved:  ", fmt.Sprintf("%d", stats.Albums.Resolved), completeStyle) + "\n"
 	albumContent += drawRow("Failed:    ", fmt.Sprintf("%d", stats.Albums.Failed), failedStyle)
 
-	trackPanel := panelBorder.Width(leftWidth / 2)
 	trackContent := lipgloss.NewStyle().Bold(true).Foreground(Secondary).Render("Tracks") + "\n\n"
 	trackContent += drawRow("Total:      ", fmt.Sprintf("%d", stats.Tracks.Total), valueStyle) + "\n"
 	trackContent += drawRow("Pending:    ", fmt.Sprintf("%d", stats.Tracks.Pending), pendingStyle) + "\n"
@@ -223,13 +253,18 @@ func (m DashboardModel) View() tea.View {
 	trackContent += drawRow("Failed:     ", fmt.Sprintf("%d", stats.Tracks.Failed), failedStyle)
 
 	statsRow := lipgloss.JoinHorizontal(lipgloss.Top,
-		albumPanel.Render(albumContent),
-		trackPanel.Render(trackContent),
+		statsPanel.Render(albumContent),
+		statsPanel.Render(trackContent),
+	)
+
+	leftContent := lipgloss.JoinVertical(lipgloss.Left,
+		collPanel.Render(collContent),
+		statsRow,
 	)
 
 	rightContent := m.buildRightPanel(titleStyle, panelBorder, rightWidth)
 
-	body := lipgloss.JoinHorizontal(lipgloss.Top, statsRow, rightContent)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, leftContent, rightContent)
 
 	content := titleStyle.Render("Dashboard") + "\n\n" + body
 
@@ -239,7 +274,8 @@ func (m DashboardModel) View() tea.View {
 func (m DashboardModel) refreshStats() tea.Cmd {
 	return func() tea.Msg {
 		s, err := db.GetCombinedStats(m.DB)
-		return statsRefreshMsg{Stats: s, Err: err}
+		cs, _ := db.GetCollectionStats(m.DB)
+		return statsRefreshMsg{Stats: s, CollStats: cs, Err: err}
 	}
 }
 
@@ -284,17 +320,16 @@ func (m DashboardModel) buildCoordinatorSection(sectionTitle func(string) string
 		status = stoppedStyle.Render("\u25aa Stopped")
 	}
 
-	cursorDisplay := "—"
-	if m.CoordCursor != "" {
-		if len(m.CoordCursor) > 24 {
-			cursorDisplay = m.CoordCursor[:24] + "..."
-		} else {
-			cursorDisplay = m.CoordCursor
+	s += fmt.Sprintf("  Status: %s\n", status)
+
+	if m.CoordCurrentCollection != "" {
+		collDisplay := m.CoordCurrentCollection
+		if len(collDisplay) > 30 {
+			collDisplay = collDisplay[:30] + "..."
 		}
+		s += mutedStyle.Render(fmt.Sprintf("  Collection: %s\n", collDisplay))
 	}
 
-	s += fmt.Sprintf("  Status: %s\n", status)
-	s += mutedStyle.Render(fmt.Sprintf("  Indexed: %d  |  Cursor: %s\n", m.CoordIndexedCount, cursorDisplay))
 	s += mutedStyle.Render("  [s] start  [x] stop  [F] reset failed")
 
 	return s
@@ -307,7 +342,14 @@ func (m DashboardModel) buildPoolSection(sectionTitle func(string) string, name 
 	s := sectionTitle(name) + "\n"
 	s += fmt.Sprintf("  Active: %d\n", count)
 
-	for _, w := range states {
+	ids := make([]string, 0, len(states))
+	for id := range states {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	for _, id := range ids {
+		w := states[id]
 		line := mutedStyle.Render(fmt.Sprintf("    %s: %d ok / %d fail",
 			w.ID, w.ProcessedCount, w.FailedCount))
 		if w.CurrentTask != "" {

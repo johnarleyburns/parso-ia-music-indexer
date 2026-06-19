@@ -62,15 +62,20 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 	dbMu := &sync.Mutex{}
 	iaClient := ia.NewClient(60 * time.Second)
 	iaClient.Transport = tui.NewInstrumentedTransport(metrics)
-	metaLimiter := ratelimit.NewLimiter(cfg.IAApiRate)
+	metaLimiter := ratelimit.NewBurstLimiter(cfg.IAApiRate, 5)
 
 	stuckTicker := time.NewTicker(5 * time.Minute)
 	defer stuckTicker.Stop()
 
+	collStats, _ := db.GetCollectionStats(sqlDB.Conn)
+	collMsg := "0 collections"
+	if collStats != nil {
+		collMsg = fmt.Sprintf("%d collections loaded", collStats.Total)
+	}
 	events <- tui.ActivityEvent{
 		Type:      tui.EventInfo,
 		Timestamp: time.Now(),
-		Message:   "Application started. [s] coordinator  [r] resolvers  [w] analyzers",
+		Message:   fmt.Sprintf("Application started. %s. [s] coordinator  [r] resolvers  [w] analyzers", collMsg),
 	}
 
 	for {
@@ -87,7 +92,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 					events <- tui.ActivityEvent{
 						Type:      tui.EventCoordStarted,
 						Timestamp: time.Now(),
-						Message:   "Coordinator started (album discovery)",
+						Message:   "Coordinator started (collection discovery)",
 					}
 					go coordinatorLoop(cfg, sqlDB, events, coordStopCh, metrics)
 				}
@@ -212,168 +217,187 @@ func coordinatorLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activit
 	client.Transport = tui.NewInstrumentedTransport(metrics)
 	limiter := ratelimit.NewLimiter(cfg.IAApiRate)
 
-	query := os.Getenv("IA_QUERY")
-	if query == "" {
-		query = ia.DefaultQuery
-	}
-
-	cursor := ""
-	itemsIndexed := 0
-
-	cursorState, err := db.GetCursor(sqlDB.Conn)
-	if err == nil && cursorState != nil && cursorState.Cursor != "" {
-		cursor = cursorState.Cursor
-		itemsIndexed = cursorState.ItemsIndexed
+	if err := db.ResetAllCollectionsForSync(sqlDB.Conn); err != nil {
 		events <- tui.ActivityEvent{
 			Type:      tui.EventInfo,
 			Timestamp: time.Now(),
-			Message:   fmt.Sprintf("Resuming from cursor: %d items indexed", itemsIndexed),
+			Message:   fmt.Sprintf("Failed to reset collections for sync: %v", err),
+			Error:     err.Error(),
 		}
+		return
 	}
 
-	for {
+	collections, err := db.GetAllCollections(sqlDB.Conn)
+	if err != nil {
+		events <- tui.ActivityEvent{
+			Type:      tui.EventInfo,
+			Timestamp: time.Now(),
+			Message:   fmt.Sprintf("Failed to load collections: %v", err),
+			Error:     err.Error(),
+		}
+		return
+	}
+
+	if len(collections) == 0 {
+		events <- tui.ActivityEvent{
+			Type:      tui.EventInfo,
+			Timestamp: time.Now(),
+			Message:   "No collections configured. Add collections to begin ingestion.",
+		}
+		return
+	}
+
+	events <- tui.ActivityEvent{
+		Type:      tui.EventCoordProgress,
+		Timestamp: time.Now(),
+		Message:   fmt.Sprintf("Starting discovery for %d collections", len(collections)),
+		Total:     len(collections),
+	}
+
+	totalAlbums := 0
+	for i, coll := range collections {
 		select {
 		case <-stopCh:
-			if err := db.SaveCursor(sqlDB.Conn, cursor, itemsIndexed); err != nil {
-				events <- tui.ActivityEvent{
-					Type:      tui.EventInfo,
-					Timestamp: time.Now(),
-					Message:   fmt.Sprintf("Failed to save cursor: %v", err),
-					Error:     err.Error(),
-				}
-			}
 			events <- tui.ActivityEvent{
 				Type:      tui.EventCoordStopped,
 				Timestamp: time.Now(),
-				Message:   fmt.Sprintf("Coordinator stopped. %d total items indexed. Cursor saved.", itemsIndexed),
-				Count:     itemsIndexed,
+				Message:   fmt.Sprintf("Coordinator stopped. %d/%d collections processed, %d albums discovered", i, len(collections), totalAlbums),
+				Count:     totalAlbums,
 			}
 			return
 		default:
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-
-		if err := limiter.Wait(ctx); err != nil {
-			cancel()
+		discovered, err := discoverCollection(cfg, sqlDB, client, limiter, events, stopCh, coll, i+1, len(collections))
+		if err != nil {
 			events <- tui.ActivityEvent{
-				Type:      tui.EventInfo,
-				Timestamp: time.Now(),
-				Message:   fmt.Sprintf("Rate limiter error: %v", err),
-				Error:     err.Error(),
+				Type:         tui.EventCollectionFailed,
+				Timestamp:    time.Now(),
+				CollectionID: coll.CollectionID,
+				Message:      fmt.Sprintf("Collection %q failed: %v", coll.Title, err),
+				Error:        err.Error(),
 			}
-			return
+			db.MarkCollectionFailed(sqlDB.Conn, coll.CollectionID, err.Error())
+			continue
+		}
+		totalAlbums += discovered
+	}
+
+	events <- tui.ActivityEvent{
+		Type:      tui.EventCoordStopped,
+		Timestamp: time.Now(),
+		Message:   fmt.Sprintf("All collections processed. %d total albums discovered", totalAlbums),
+		Count:     totalAlbums,
+	}
+}
+
+func discoverCollection(cfg *config.Config, sqlDB *db.DB, client *http.Client, limiter *ratelimit.Limiter,
+	events chan<- tui.ActivityEvent, stopCh <-chan struct{}, coll db.Collection, idx, total int) (int, error) {
+
+	events <- tui.ActivityEvent{
+		Type:         tui.EventCollectionStarted,
+		Timestamp:    time.Now(),
+		CollectionID: coll.CollectionID,
+		Message:      fmt.Sprintf("[%d/%d] Discovering collection %q (~%d items)", idx, total, coll.Title, coll.ExpectedCount),
+		Total:        coll.ExpectedCount,
+	}
+
+	db.MarkCollectionDiscovering(sqlDB.Conn, coll.CollectionID)
+
+	cursor := coll.LastCursor
+	discovered := coll.DiscoveredCount
+
+	for {
+		select {
+		case <-stopCh:
+			db.SaveCollectionCursor(sqlDB.Conn, coll.CollectionID, cursor, discovered)
+			return discovered, nil
+		default:
 		}
 
-		resp, err := ia.ScrapePage(ctx, client, cursor, query, ia.DefaultSort, ia.DefaultCount)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := limiter.Wait(ctx); err != nil {
+			cancel()
+			return discovered, fmt.Errorf("rate limiter: %w", err)
+		}
+
+		resp, err := ia.ScrapePage(ctx, client, cursor, coll.Query, ia.DefaultSort, ia.DefaultCount)
 		cancel()
 
 		if err != nil {
 			events <- tui.ActivityEvent{
-				Type:      tui.EventInfo,
-				Timestamp: time.Now(),
-				Message:   fmt.Sprintf("Scrape error: %v", err),
-				Error:     err.Error(),
+				Type:         tui.EventInfo,
+				Timestamp:    time.Now(),
+				CollectionID: coll.CollectionID,
+				Message:      fmt.Sprintf("Scrape error for %q: %v (retrying)", coll.Title, err),
+				Error:        err.Error(),
 			}
 			select {
 			case <-time.After(5 * time.Second):
 			case <-stopCh:
-				db.SaveCursor(sqlDB.Conn, cursor, itemsIndexed)
-				return
+				db.SaveCollectionCursor(sqlDB.Conn, coll.CollectionID, cursor, discovered)
+				return discovered, nil
 			}
 			continue
 		}
 
 		if len(resp.Items) == 0 {
-			events <- tui.ActivityEvent{
-				Type:      tui.EventInfo,
-				Timestamp: time.Now(),
-				Message:   "Scrape returned 0 items — collection exhausted or empty result",
-			}
-			db.SaveCursor(sqlDB.Conn, cursor, itemsIndexed)
-			return
+			break
 		}
 
-		identifiers := make([]db.AlbumInsert, len(resp.Items))
+		albums := make([]db.AlbumInsert, len(resp.Items))
 		for i, item := range resp.Items {
-			identifiers[i] = db.AlbumInsert{Identifier: item.Identifier, Downloads: item.Downloads}
+			albums[i] = db.AlbumInsert{Identifier: item.Identifier, Downloads: item.Downloads}
 		}
 
-		inserted, err := db.BulkInsertAlbums(sqlDB.Conn, identifiers)
+		inserted, err := db.BulkInsertCollectionAlbums(sqlDB.Conn, coll.CollectionID, albums)
 		if err != nil {
-			events <- tui.ActivityEvent{
-				Type:      tui.EventInfo,
-				Timestamp: time.Now(),
-				Message:   fmt.Sprintf("DB insert error: %v", err),
-				Error:     err.Error(),
-			}
-			select {
-			case <-time.After(5 * time.Second):
-			case <-stopCh:
-				db.SaveCursor(sqlDB.Conn, cursor, itemsIndexed)
-				return
-			}
-			continue
+			return discovered, fmt.Errorf("insert albums: %w", err)
 		}
 
-		itemsIndexed += int(inserted)
+		discovered += int(inserted)
 		cursor = resp.Cursor
-		total := resp.Total
 
-		if err := db.SaveCursor(sqlDB.Conn, cursor, itemsIndexed); err != nil {
-			events <- tui.ActivityEvent{
-				Type:      tui.EventInfo,
-				Timestamp: time.Now(),
-				Message:   fmt.Sprintf("Failed to save cursor: %v", err),
-				Error:     err.Error(),
-			}
-		}
+		db.SaveCollectionCursor(sqlDB.Conn, coll.CollectionID, cursor, discovered)
 
 		events <- tui.ActivityEvent{
-			Type:      tui.EventCoordProgress,
-			Timestamp: time.Now(),
-			Message:   fmt.Sprintf("Scraped page: %d new albums, %d total indexed (of ~%d)", inserted, itemsIndexed, total),
-			Count:     itemsIndexed,
-			Cursor:    cursor,
-			Total:     total,
-		}
-
-		for _, a := range identifiers {
-			events <- tui.ActivityEvent{
-				Type:       tui.EventQueueAdded,
-				Timestamp:  time.Now(),
-				Identifier: a.Identifier,
-				Message:    fmt.Sprintf("+ %s  (album added)", a.Identifier),
-			}
+			Type:         tui.EventCollectionProgress,
+			Timestamp:    time.Now(),
+			CollectionID: coll.CollectionID,
+			Message:      fmt.Sprintf("[%d/%d] %q: +%d new, %d total (of ~%d)", idx, total, coll.Title, inserted, discovered, coll.ExpectedCount),
+			Count:        discovered,
+			Total:        coll.ExpectedCount,
 		}
 
 		if cursor == "" {
-			events <- tui.ActivityEvent{
-				Type:      tui.EventCoordStopped,
-				Timestamp: time.Now(),
-				Message:   fmt.Sprintf("No more pages. %d total items indexed", itemsIndexed),
-				Count:     itemsIndexed,
-			}
-			return
+			break
 		}
 
 		select {
 		case <-time.After(2 * time.Second):
 		case <-stopCh:
-			db.SaveCursor(sqlDB.Conn, cursor, itemsIndexed)
-			events <- tui.ActivityEvent{
-				Type:      tui.EventCoordStopped,
-				Timestamp: time.Now(),
-				Message:   fmt.Sprintf("Coordinator stopped. %d total items indexed", itemsIndexed),
-				Count:     itemsIndexed,
-			}
-			return
+			db.SaveCollectionCursor(sqlDB.Conn, coll.CollectionID, cursor, discovered)
+			return discovered, nil
 		}
 	}
+
+	db.MarkCollectionDiscovered(sqlDB.Conn, coll.CollectionID, discovered)
+
+	events <- tui.ActivityEvent{
+		Type:         tui.EventCollectionCompleted,
+		Timestamp:    time.Now(),
+		CollectionID: coll.CollectionID,
+		Message:      fmt.Sprintf("[%d/%d] Collection %q complete: %d albums", idx, total, coll.Title, discovered),
+		Count:        discovered,
+	}
+
+	return discovered, nil
 }
 
 func albumResolverLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
 	dbMu *sync.Mutex, iaClient *http.Client, metaLimiter *ratelimit.Limiter, resolverID string, metrics *tui.Metrics) {
+	batchSize := 10
+
 	for {
 		select {
 		case <-stopCh:
@@ -382,26 +406,47 @@ func albumResolverLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-c
 		}
 
 		dbMu.Lock()
-		albumID, err := db.ClaimUnresolvedAlbum(sqlDB.Conn, resolverID)
+		albumIDs, err := db.ClaimUnresolvedAlbumBatch(sqlDB.Conn, resolverID, batchSize)
 		dbMu.Unlock()
 		if err != nil {
 			events <- tui.ActivityEvent{
 				Type:      tui.EventInfo,
 				Timestamp: time.Now(),
 				WorkerID:  resolverID,
-				Message:   fmt.Sprintf("[%s] Claim album error: %v", resolverID, err),
+				Message:   fmt.Sprintf("[%s] Claim album batch error: %v", resolverID, err),
 				Error:     err.Error(),
 			}
 			sleepOrStop(5*time.Second, stopCh)
 			continue
 		}
 
-		if albumID == "" {
+		if len(albumIDs) == 0 {
 			sleepOrStop(3*time.Second, stopCh)
 			continue
 		}
 
-		resolveAlbum(sqlDB, events, dbMu, iaClient, metaLimiter, resolverID, albumID, metrics)
+		events <- tui.ActivityEvent{
+			Type:      tui.EventInfo,
+			Timestamp: time.Now(),
+			WorkerID:  resolverID,
+			Message:   fmt.Sprintf("[%s] Resolving batch of %d albums", resolverID, len(albumIDs)),
+		}
+
+		var wg sync.WaitGroup
+		for _, albumID := range albumIDs {
+			select {
+			case <-stopCh:
+				wg.Wait()
+				return
+			default:
+			}
+			wg.Add(1)
+			go func(id string) {
+				defer wg.Done()
+				resolveAlbum(sqlDB, events, dbMu, iaClient, metaLimiter, resolverID, id, metrics)
+			}(albumID)
+		}
+		wg.Wait()
 	}
 }
 
@@ -800,6 +845,15 @@ func runTUI(cfg *config.Config) {
 	}
 	defer sqlDB.Close()
 
+	seeded, err := db.SeedCollectionsIfEmpty(sqlDB.Conn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error seeding collections: %v\n", err)
+		os.Exit(1)
+	}
+	if seeded > 0 {
+		fmt.Fprintf(os.Stderr, "Seeded %d collections\n", seeded)
+	}
+
 	logDir := filepath.Dir(cfg.DBPath)
 	sidecarProc, clapClient, err := clap.EnsureSidecar(cfg.ClapHost, cfg.ClapPort, cfg.ClapSidecarDir, logDir, func(msg string) {
 		fmt.Fprintf(os.Stderr, "%s\n", msg)
@@ -837,6 +891,15 @@ func runHeadless(cfg *config.Config) {
 	}
 	defer sqlDB.Close()
 
+	seeded, err := db.SeedCollectionsIfEmpty(sqlDB.Conn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error seeding collections: %v\n", err)
+		os.Exit(1)
+	}
+	if seeded > 0 {
+		fmt.Fprintf(os.Stderr, "Seeded %d collections\n", seeded)
+	}
+
 	logDir := filepath.Dir(cfg.DBPath)
 	sidecarProc, clapClient, err := clap.EnsureSidecar(cfg.ClapHost, cfg.ClapPort, cfg.ClapSidecarDir, logDir, func(msg string) {
 		fmt.Fprintf(os.Stderr, "%s\n", msg)
@@ -856,6 +919,8 @@ func runHeadless(cfg *config.Config) {
 		os.Exit(1)
 	}
 
+	collStats, _ := db.GetCollectionStats(sqlDB.Conn)
+
 	embedCount, err := db.GetEmbeddingCount(sqlDB.Conn)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error getting embedding count: %v\n", err)
@@ -864,10 +929,23 @@ func runHeadless(cfg *config.Config) {
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetEscapeHTML(false)
+
+	collStatsMap := map[string]int{}
+	if collStats != nil {
+		collStatsMap = map[string]int{
+			"total":       collStats.Total,
+			"pending":     collStats.Pending,
+			"discovering": collStats.Discovering,
+			"discovered":  collStats.Discovered,
+			"failed":      collStats.Failed,
+		}
+	}
+
 	enc.Encode(map[string]interface{}{
 		"event":   "db_stats",
 		"mode":    "headless",
 		"db_path": cfg.DBPath,
+		"collections": collStatsMap,
 		"albums": map[string]int{
 			"total":     stats.Albums.Total,
 			"pending":   stats.Albums.Pending,

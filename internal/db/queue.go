@@ -167,6 +167,46 @@ func BulkInsertAlbums(db *sql.DB, albums []AlbumInsert) (int64, error) {
 	return inserted, nil
 }
 
+func BulkInsertCollectionAlbums(sqlDB *sql.DB, collectionID string, albums []AlbumInsert) (int64, error) {
+	tx, err := sqlDB.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	albumStmt, err := tx.Prepare(`INSERT OR IGNORE INTO albums(ia_identifier, downloads, status) VALUES(?, ?, 'pending')`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare album: %w", err)
+	}
+	defer albumStmt.Close()
+
+	linkStmt, err := tx.Prepare(`INSERT OR IGNORE INTO collection_albums(collection_id, album_id) VALUES(?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare link: %w", err)
+	}
+	defer linkStmt.Close()
+
+	var inserted int64
+	for _, a := range albums {
+		res, err := albumStmt.Exec(a.Identifier, a.Downloads)
+		if err != nil {
+			return inserted, fmt.Errorf("insert album %s: %w", a.Identifier, err)
+		}
+		n, _ := res.RowsAffected()
+		inserted += n
+
+		if _, err := linkStmt.Exec(collectionID, a.Identifier); err != nil {
+			return inserted, fmt.Errorf("link %s to %s: %w", a.Identifier, collectionID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return inserted, fmt.Errorf("commit: %w", err)
+	}
+
+	return inserted, nil
+}
+
 func ClaimUnresolvedAlbum(db *sql.DB, workerID string) (string, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -200,6 +240,56 @@ func ClaimUnresolvedAlbum(db *sql.DB, workerID string) (string, error) {
 	}
 
 	return identifier, nil
+}
+
+func ClaimUnresolvedAlbumBatch(db *sql.DB, workerID string, batchSize int) ([]string, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(
+		`SELECT ia_identifier FROM albums WHERE status = 'pending' ORDER BY created_at LIMIT ?`,
+		batchSize,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("select pending albums: %w", err)
+	}
+	defer rows.Close()
+
+	var identifiers []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		identifiers = append(identifiers, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(identifiers) == 0 {
+		return nil, nil
+	}
+
+	for _, id := range identifiers {
+		if _, err := tx.Exec(
+			`UPDATE albums SET status='resolving', updated_at=? WHERE ia_identifier=?`,
+			now, id,
+		); err != nil {
+			return nil, fmt.Errorf("update album %s: %w", id, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+
+	return identifiers, nil
 }
 
 func MarkAlbumResolved(db *sql.DB, identifier, title, creator, collection, artURL string, trackCount int) error {

@@ -8,20 +8,24 @@ import (
 )
 
 var (
-	eventQueueAddedStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#06b6d4"))
-	eventCoordStartedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
-	eventCoordStoppedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
-	eventCoordProgressStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#a78bfa"))
-	eventWorkerStartedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#eab308"))
-	eventWorkerStoppedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
-	eventAnalysisStartedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#eab308"))
-	eventAnalysisCompleteStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
-	eventAnalysisFailedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
-	eventAlbumResolvingStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#a78bfa"))
-	eventAlbumResolvedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
-	eventAlbumFailedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
-	eventInfoStyle             = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
-	eventTimeStyle             = lipgloss.NewStyle().Foreground(lipgloss.Color("#4b5563"))
+	eventQueueAddedStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("#06b6d4"))
+	eventCoordStartedStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
+	eventCoordStoppedStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	eventCoordProgressStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#a78bfa"))
+	eventCollectionStartedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#06b6d4")).Bold(true)
+	eventCollectionProgressStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#a78bfa"))
+	eventCollectionCompletedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
+	eventCollectionFailedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
+	eventWorkerStartedStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#eab308"))
+	eventWorkerStoppedStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	eventAnalysisStartedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#eab308"))
+	eventAnalysisCompleteStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
+	eventAnalysisFailedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
+	eventAlbumResolvingStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#a78bfa"))
+	eventAlbumResolvedStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
+	eventAlbumFailedStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
+	eventInfoStyle                = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	eventTimeStyle                = lipgloss.NewStyle().Foreground(lipgloss.Color("#4b5563"))
 )
 
 func eventStyle(t EventType) lipgloss.Style {
@@ -34,6 +38,14 @@ func eventStyle(t EventType) lipgloss.Style {
 		return eventCoordStoppedStyle
 	case EventCoordProgress:
 		return eventCoordProgressStyle
+	case EventCollectionStarted:
+		return eventCollectionStartedStyle
+	case EventCollectionProgress:
+		return eventCollectionProgressStyle
+	case EventCollectionCompleted:
+		return eventCollectionCompletedStyle
+	case EventCollectionFailed:
+		return eventCollectionFailedStyle
 	case EventWorkerStarted:
 		return eventWorkerStartedStyle
 	case EventWorkerStopped:
@@ -65,6 +77,14 @@ func eventPrefix(t EventType) string {
 		return "\u25aa"
 	case EventCoordProgress:
 		return "\u2192"
+	case EventCollectionStarted:
+		return "\u25b6"
+	case EventCollectionProgress:
+		return "\u2192"
+	case EventCollectionCompleted:
+		return "\u2714"
+	case EventCollectionFailed:
+		return "\u2718"
 	case EventWorkerStarted:
 		return "\u2699"
 	case EventWorkerStopped:

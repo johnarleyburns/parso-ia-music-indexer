@@ -34,11 +34,30 @@ func (db *DB) Close() error {
 }
 
 func (db *DB) migrate() error {
-	if err := db.migrateFromOldSchema(); err != nil {
-		return fmt.Errorf("legacy migration: %w", err)
+	if err := db.dropLegacyTables(); err != nil {
+		return fmt.Errorf("legacy cleanup: %w", err)
 	}
 
 	queries := []string{
+		`CREATE TABLE IF NOT EXISTS collections (
+			collection_id    TEXT PRIMARY KEY,
+			title            TEXT NOT NULL,
+			description      TEXT,
+			category         TEXT,
+			curator          TEXT,
+			url              TEXT,
+			query            TEXT NOT NULL,
+			expected_count   INTEGER NOT NULL DEFAULT 0,
+			discovered_count INTEGER NOT NULL DEFAULT 0,
+			status           TEXT NOT NULL DEFAULT 'pending'
+				CHECK(status IN ('pending','discovering','discovered','failed')),
+			last_cursor      TEXT,
+			error_message    TEXT,
+			last_synced_at   TEXT,
+			created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+
 		`CREATE TABLE IF NOT EXISTS albums (
 			ia_identifier TEXT PRIMARY KEY,
 			title         TEXT,
@@ -49,10 +68,21 @@ func (db *DB) migrate() error {
 			status        TEXT NOT NULL DEFAULT 'pending'
 				CHECK(status IN ('pending','resolving','resolved','failed')),
 			error_message TEXT,
+			downloads     INTEGER NOT NULL DEFAULT 0,
+			retry_count   INTEGER NOT NULL DEFAULT 0,
 			created_at    TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_albums_status ON albums(status)`,
+
+		`CREATE TABLE IF NOT EXISTS collection_albums (
+			collection_id TEXT NOT NULL REFERENCES collections(collection_id),
+			album_id      TEXT NOT NULL REFERENCES albums(ia_identifier),
+			created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+			PRIMARY KEY (collection_id, album_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_collection_albums_collection ON collection_albums(collection_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_collection_albums_album ON collection_albums(album_id)`,
 
 		`CREATE TABLE IF NOT EXISTS tracks (
 			id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,14 +113,6 @@ func (db *DB) migrate() error {
 			quality_score REAL,
 			created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
-
-		`CREATE TABLE IF NOT EXISTS cursor_state (
-			id             INTEGER PRIMARY KEY CHECK(id = 1),
-			last_cursor    TEXT,
-			items_indexed  INTEGER NOT NULL DEFAULT 0,
-			last_run_at    TEXT
-		)`,
-		`INSERT OR IGNORE INTO cursor_state(id, last_cursor, items_indexed) VALUES(1, '', 0)`,
 	}
 
 	for _, q := range queries {
@@ -99,67 +121,17 @@ func (db *DB) migrate() error {
 		}
 	}
 
-	db.Conn.Exec(`ALTER TABLE albums ADD COLUMN downloads INTEGER NOT NULL DEFAULT 0`)
-	db.Conn.Exec(`ALTER TABLE albums ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0`)
-
 	return nil
 }
 
-func (db *DB) migrateFromOldSchema() error {
-	var tableName string
-	err := db.Conn.QueryRow(
-		`SELECT name FROM sqlite_master WHERE type='table' AND name='catalog_queue'`,
-	).Scan(&tableName)
-
-	if err == sql.ErrNoRows {
-		return nil
+func (db *DB) dropLegacyTables() error {
+	for _, name := range []string{"cursor_state", "catalog_queue"} {
+		if tableExists(db.Conn, name) {
+			if _, err := db.Conn.Exec(fmt.Sprintf("DROP TABLE %s", name)); err != nil {
+				return fmt.Errorf("drop %s: %w", name, err)
+			}
+		}
 	}
-	if err != nil {
-		return fmt.Errorf("check catalog_queue: %w", err)
-	}
-
-	tx, err := db.Conn.Begin()
-	if err != nil {
-		return fmt.Errorf("begin migration tx: %w", err)
-	}
-	defer tx.Rollback()
-
-	_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS albums (
-		ia_identifier TEXT PRIMARY KEY,
-		title         TEXT,
-		creator       TEXT,
-		collection    TEXT,
-		art_url       TEXT,
-		track_count   INTEGER NOT NULL DEFAULT 0,
-		status        TEXT NOT NULL DEFAULT 'pending',
-		error_message TEXT,
-		created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-		updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
-	)`)
-	if err != nil {
-		return fmt.Errorf("create albums: %w", err)
-	}
-
-	_, err = tx.Exec(`INSERT OR IGNORE INTO albums(ia_identifier, status, created_at, updated_at)
-		SELECT ia_identifier, 'pending', created_at, updated_at FROM catalog_queue`)
-	if err != nil {
-		return fmt.Errorf("migrate catalog_queue to albums: %w", err)
-	}
-
-	_, err = tx.Exec(`DROP TABLE IF EXISTS track_embeddings`)
-	if err != nil {
-		return fmt.Errorf("drop old track_embeddings: %w", err)
-	}
-
-	_, err = tx.Exec(`DROP TABLE IF EXISTS catalog_queue`)
-	if err != nil {
-		return fmt.Errorf("drop catalog_queue: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit migration: %w", err)
-	}
-
 	return nil
 }
 

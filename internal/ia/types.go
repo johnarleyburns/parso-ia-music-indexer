@@ -19,7 +19,6 @@ type ScrapeResponse struct {
 }
 
 const (
-	DefaultQuery = "mediatype:audio AND collection:(etree OR 78rpm OR georgeblood OR netlabels OR audio_music OR hiphopmixtapes OR unlockedrecordings OR folkmusic)"
 	DefaultSort  = "downloads desc"
 	DefaultCount = 1000
 )

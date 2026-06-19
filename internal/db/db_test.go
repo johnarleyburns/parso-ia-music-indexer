@@ -50,9 +50,11 @@ func TestOpenMigrate(t *testing.T) {
 		t.Errorf("expected 0 tracks, got %d", count)
 	}
 
-	var id int
-	if err := db.Conn.QueryRow(`SELECT id FROM cursor_state WHERE id=1`).Scan(&id); err != nil {
-		t.Fatalf("query cursor_state: %v", err)
+	if err := db.Conn.QueryRow(`SELECT count(*) FROM collections`).Scan(&count); err != nil {
+		t.Fatalf("query collections: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 collections, got %d", count)
 	}
 
 	if err := db.migrate(); err != nil {
@@ -60,7 +62,7 @@ func TestOpenMigrate(t *testing.T) {
 	}
 }
 
-func TestMigrateFromOldSchema(t *testing.T) {
+func TestDropLegacyTables(t *testing.T) {
 	path := t.TempDir() + "/migrate_test.db"
 
 	conn, err := openRaw(path)
@@ -74,12 +76,6 @@ func TestMigrateFromOldSchema(t *testing.T) {
 		error_message TEXT,
 		created_at TEXT NOT NULL DEFAULT (datetime('now')),
 		updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-	)`)
-	conn.Exec(`CREATE TABLE track_embeddings (
-		ia_identifier TEXT PRIMARY KEY,
-		embedding BLOB NOT NULL,
-		quality_score REAL,
-		created_at TEXT NOT NULL DEFAULT (datetime('now'))
 	)`)
 	conn.Exec(`INSERT INTO catalog_queue(ia_identifier) VALUES('album-a'),('album-b'),('album-c')`)
 	conn.Exec(`CREATE TABLE cursor_state (
@@ -95,22 +91,11 @@ func TestMigrateFromOldSchema(t *testing.T) {
 	}
 	defer db.Close()
 
-	var albumCount int
-	db.Conn.QueryRow(`SELECT count(*) FROM albums WHERE status='pending'`).Scan(&albumCount)
-	if albumCount != 3 {
-		t.Errorf("expected 3 migrated albums, got %d", albumCount)
-	}
-
 	if tableExists(db.Conn, "catalog_queue") {
 		t.Error("catalog_queue should have been dropped")
 	}
-
-	cursor, err := GetCursor(db.Conn)
-	if err != nil {
-		t.Fatalf("GetCursor: %v", err)
-	}
-	if cursor.Cursor != "abc" || cursor.ItemsIndexed != 42 {
-		t.Errorf("cursor not preserved: %+v", cursor)
+	if tableExists(db.Conn, "cursor_state") {
+		t.Error("cursor_state should have been dropped")
 	}
 }
 
@@ -557,5 +542,136 @@ func TestGetAlbumTracks(t *testing.T) {
 	}
 	if tracks[0].TrackNumber != 1 || tracks[1].TrackNumber != 2 {
 		t.Errorf("track numbers: %d, %d", tracks[0].TrackNumber, tracks[1].TrackNumber)
+	}
+}
+
+func TestSeedCollectionsIfEmpty(t *testing.T) {
+	db := testDB(t)
+
+	n, err := SeedCollectionsIfEmpty(db.Conn)
+	if err != nil {
+		t.Fatalf("SeedCollectionsIfEmpty: %v", err)
+	}
+	if n == 0 {
+		t.Fatal("expected collections to be seeded")
+	}
+
+	count, err := GetCollectionCount(db.Conn)
+	if err != nil {
+		t.Fatalf("GetCollectionCount: %v", err)
+	}
+	if count != int(n) {
+		t.Errorf("expected %d collections, got %d", n, count)
+	}
+
+	n2, err := SeedCollectionsIfEmpty(db.Conn)
+	if err != nil {
+		t.Fatalf("second SeedCollectionsIfEmpty: %v", err)
+	}
+	if n2 != 0 {
+		t.Errorf("expected 0 on second seed, got %d", n2)
+	}
+}
+
+func TestCollectionStats(t *testing.T) {
+	db := testDB(t)
+
+	InsertCollection(db.Conn, CollectionInsert{
+		CollectionID: "test-coll", Title: "Test", Query: "collection:test", ExpectedCount: 100,
+	})
+	InsertCollection(db.Conn, CollectionInsert{
+		CollectionID: "test-coll2", Title: "Test 2", Query: "collection:test2", ExpectedCount: 50,
+	})
+
+	stats, err := GetCollectionStats(db.Conn)
+	if err != nil {
+		t.Fatalf("GetCollectionStats: %v", err)
+	}
+	if stats.Total != 2 || stats.Pending != 2 {
+		t.Errorf("expected 2 total/pending, got %+v", stats)
+	}
+
+	MarkCollectionDiscovering(db.Conn, "test-coll")
+	stats, _ = GetCollectionStats(db.Conn)
+	if stats.Discovering != 1 || stats.Pending != 1 {
+		t.Errorf("expected 1 discovering, 1 pending, got %+v", stats)
+	}
+
+	MarkCollectionDiscovered(db.Conn, "test-coll", 42)
+	stats, _ = GetCollectionStats(db.Conn)
+	if stats.Discovered != 1 {
+		t.Errorf("expected 1 discovered, got %+v", stats)
+	}
+}
+
+func TestBulkInsertCollectionAlbums(t *testing.T) {
+	db := testDB(t)
+
+	InsertCollection(db.Conn, CollectionInsert{
+		CollectionID: "coll-a", Title: "Coll A", Query: "collection:a", ExpectedCount: 10,
+	})
+	InsertCollection(db.Conn, CollectionInsert{
+		CollectionID: "coll-b", Title: "Coll B", Query: "collection:b", ExpectedCount: 5,
+	})
+
+	albums := []AlbumInsert{
+		{Identifier: "album-1", Downloads: 100},
+		{Identifier: "album-2", Downloads: 50},
+	}
+
+	n, err := BulkInsertCollectionAlbums(db.Conn, "coll-a", albums)
+	if err != nil {
+		t.Fatalf("BulkInsertCollectionAlbums: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("expected 2 inserted, got %d", n)
+	}
+
+	count, err := GetCollectionAlbumCount(db.Conn, "coll-a")
+	if err != nil {
+		t.Fatalf("GetCollectionAlbumCount: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 collection albums, got %d", count)
+	}
+
+	n, err = BulkInsertCollectionAlbums(db.Conn, "coll-b", []AlbumInsert{{Identifier: "album-1", Downloads: 100}})
+	if err != nil {
+		t.Fatalf("BulkInsertCollectionAlbums coll-b: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("expected 0 new albums (already exists), got %d", n)
+	}
+
+	count, err = GetCollectionAlbumCount(db.Conn, "coll-b")
+	if err != nil {
+		t.Fatalf("GetCollectionAlbumCount coll-b: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 collection album link, got %d", count)
+	}
+}
+
+func TestRemoveCollection(t *testing.T) {
+	db := testDB(t)
+
+	InsertCollection(db.Conn, CollectionInsert{
+		CollectionID: "to-remove", Title: "Remove Me", Query: "collection:remove", ExpectedCount: 1,
+	})
+	BulkInsertCollectionAlbums(db.Conn, "to-remove", []AlbumInsert{{Identifier: "album-x"}})
+
+	if err := RemoveCollection(db.Conn, "to-remove"); err != nil {
+		t.Fatalf("RemoveCollection: %v", err)
+	}
+
+	count, _ := GetCollectionCount(db.Conn)
+	if count != 0 {
+		t.Errorf("expected 0 collections after removal, got %d", count)
+	}
+
+	var linkCount int
+	db.Conn.QueryRow(`SELECT count(*) FROM collection_albums WHERE collection_id='to-remove'`).Scan(&linkCount)
+	if linkCount != 0 {
+		t.Errorf("expected 0 links after removal, got %d", linkCount)
 	}
 }

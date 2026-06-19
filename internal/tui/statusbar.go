@@ -166,9 +166,11 @@ func RenderStatusBar(metrics *Metrics, stats *db.CombinedStats, rs ResourceStats
 	}
 
 	line3Parts := []string{
-		labelStyle.Render("Albums:") + " " + mutedVal.Render(fmt.Sprintf("%d/%d", albumsDone, albumsTotal)) + " " + valStyle.Render(fmt.Sprintf("%.1f%% total", albumPctTotal)) + " " + mutedVal.Render(fmt.Sprintf("%.1f%% vs pending", albumPctVsPending)),
-		labelStyle.Render("Tracks:") + " " + mutedVal.Render(fmt.Sprintf("%d/%d", tracksDone, tracksTotal)) + " " + valStyle.Render(fmt.Sprintf("%.1f%% total", trackPctTotal)) + " " + mutedVal.Render(fmt.Sprintf("%.1f%% vs pending", trackPctVsPending)),
+		labelStyle.Render("Albums:") + " " + mutedVal.Render(fmt.Sprintf("%d/%d", albumsDone, albumsTotal)) + " " + valStyle.Render(fmt.Sprintf("%.1f%%", albumPctTotal)),
+		labelStyle.Render("Tracks:") + " " + mutedVal.Render(fmt.Sprintf("%d/%d", tracksDone, tracksTotal)) + " " + valStyle.Render(fmt.Sprintf("%.1f%%", trackPctTotal)),
 	}
+	_ = albumPctVsPending
+	_ = trackPctVsPending
 
 	line1 := " " + strings.Join(line1Parts, sep)
 	line2 := " " + strings.Join(line2Parts, sep)
