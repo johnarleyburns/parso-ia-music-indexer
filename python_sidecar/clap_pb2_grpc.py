@@ -41,6 +41,11 @@ class CLAPEmbedderStub:
                 request_serializer=clap__pb2.EmbeddingRequest.SerializeToString,
                 response_deserializer=clap__pb2.EmbeddingResponse.FromString,
                 _registered_method=True)
+        self.GetTextEmbedding = channel.unary_unary(
+                '/clap.CLAPEmbedder/GetTextEmbedding',
+                request_serializer=clap__pb2.TextEmbeddingRequest.SerializeToString,
+                response_deserializer=clap__pb2.EmbeddingResponse.FromString,
+                _registered_method=True)
 
 
 class CLAPEmbedderServicer:
@@ -49,9 +54,13 @@ class CLAPEmbedderServicer:
     """
 
     def GetEmbedding(self, request, context):
-        """GetEmbedding receives raw PCM audio samples and returns a 512-dim
-        semantic embedding vector from the LAION-CLAP model.
-        """
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetTextEmbedding(self, request, context):
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -62,6 +71,11 @@ def add_CLAPEmbedderServicer_to_server(servicer, server):
             'GetEmbedding': grpc.unary_unary_rpc_method_handler(
                     servicer.GetEmbedding,
                     request_deserializer=clap__pb2.EmbeddingRequest.FromString,
+                    response_serializer=clap__pb2.EmbeddingResponse.SerializeToString,
+            ),
+            'GetTextEmbedding': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetTextEmbedding,
+                    request_deserializer=clap__pb2.TextEmbeddingRequest.FromString,
                     response_serializer=clap__pb2.EmbeddingResponse.SerializeToString,
             ),
     }
@@ -93,6 +107,33 @@ class CLAPEmbedder:
             target,
             '/clap.CLAPEmbedder/GetEmbedding',
             clap__pb2.EmbeddingRequest.SerializeToString,
+            clap__pb2.EmbeddingResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetTextEmbedding(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/clap.CLAPEmbedder/GetTextEmbedding',
+            clap__pb2.TextEmbeddingRequest.SerializeToString,
             clap__pb2.EmbeddingResponse.FromString,
             options,
             channel_credentials,

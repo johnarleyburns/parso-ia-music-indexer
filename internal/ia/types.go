@@ -67,6 +67,7 @@ type IAMetadataFile struct {
 	Title   string `json:"title"`
 	Track   string `json:"track"`
 	Bitrate string `json:"bitrate"`
+	Length  string `json:"length"`
 }
 
 type AlbumMetadata struct {
@@ -84,8 +85,11 @@ type TrackFile struct {
 	TrackNumber int
 	Format      string
 	Bitrate     int
+	Duration    float64
 	DownloadURL string
 }
+
+const MaxTrackDurationSec = 32 * 60
 
 var legacyBlacklist = map[string]bool{
 	"64Kbps MP3":  true,
@@ -123,6 +127,18 @@ func parseBitrate(s string) int {
 	var n int
 	if _, err := fmt.Sscanf(s, "%d", &n); err == nil {
 		return n
+	}
+	return 0
+}
+
+func parseDuration(s string) float64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	var f float64
+	if _, err := fmt.Sscanf(s, "%f", &f); err == nil {
+		return f
 	}
 	return 0
 }

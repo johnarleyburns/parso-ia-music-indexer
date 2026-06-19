@@ -38,6 +38,10 @@ func (db *DB) migrate() error {
 		return fmt.Errorf("legacy cleanup: %w", err)
 	}
 
+	if err := db.migrateSchemaChanges(); err != nil {
+		return fmt.Errorf("schema migration: %w", err)
+	}
+
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS collections (
 			collection_id    TEXT PRIMARY KEY,
@@ -92,6 +96,7 @@ func (db *DB) migrate() error {
 			track_number  INTEGER,
 			format        TEXT,
 			bitrate       INTEGER,
+			duration      REAL,
 			download_url  TEXT NOT NULL,
 			status        TEXT NOT NULL DEFAULT 'pending'
 				CHECK(status IN ('pending','processing','completed','failed')),
@@ -108,10 +113,15 @@ func (db *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_tracks_locked ON tracks(status, locked_at)`,
 
 		`CREATE TABLE IF NOT EXISTS track_embeddings (
-			track_id      INTEGER PRIMARY KEY REFERENCES tracks(id),
-			embedding     BLOB NOT NULL,
-			quality_score REAL,
-			created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+			track_id       INTEGER PRIMARY KEY REFERENCES tracks(id),
+			clap           BLOB NOT NULL,
+			mfcc           BLOB NOT NULL,
+			chroma         BLOB NOT NULL,
+			model_version  TEXT NOT NULL DEFAULT 'clap-htsat-fused:audio+text:512:l2:f16',
+			dim            INTEGER NOT NULL DEFAULT 512,
+			dtype          TEXT NOT NULL DEFAULT 'f16',
+			quality_score  REAL,
+			created_at     TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 	}
 
@@ -135,10 +145,46 @@ func (db *DB) dropLegacyTables() error {
 	return nil
 }
 
+func (db *DB) migrateSchemaChanges() error {
+	if tableExists(db.Conn, "track_embeddings") && columnExists(db.Conn, "track_embeddings", "embedding") {
+		if _, err := db.Conn.Exec("DROP TABLE track_embeddings"); err != nil {
+			return fmt.Errorf("drop old track_embeddings: %w", err)
+		}
+	}
+
+	if tableExists(db.Conn, "tracks") && !columnExists(db.Conn, "tracks", "duration") {
+		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN duration REAL")
+	}
+
+	return nil
+}
+
 func tableExists(db *sql.DB, name string) bool {
 	var n string
 	err := db.QueryRow(
 		`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, name,
 	).Scan(&n)
 	return err == nil
+}
+
+func columnExists(db *sql.DB, table, column string) bool {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dflt *string
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false
+		}
+		if name == column {
+			return true
+		}
+	}
+	return false
 }

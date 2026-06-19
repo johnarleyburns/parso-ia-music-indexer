@@ -7,15 +7,17 @@ import (
 )
 
 type Config struct {
-	DBPath         string
-	Headless       bool
-	Workers        int
-	MaxBytes       int
-	ThrottleBPS    int
-	IAApiRate      int
-	ClapHost       string
-	ClapPort       int
-	ClapSidecarDir string
+	DBPath              string
+	Headless            bool
+	Workers             int
+	MaxBytes            int
+	ThrottleBPS         int
+	IAApiRate           int
+	ClapHost            string
+	ClapPort            int
+	ClapSidecarDir      string
+	SearchText          string
+	LibrivoxDenylistPath string
 }
 
 func Parse() *Config {
@@ -30,6 +32,8 @@ func Parse() *Config {
 	flag.StringVar(&cfg.ClapHost, "clap-host", envOrDefault("CLAP_HOST", "localhost"), "CLAP gRPC server host")
 	flag.IntVar(&cfg.ClapPort, "clap-port", envOrDefaultInt("CLAP_PORT", 50051), "CLAP gRPC server port")
 	flag.StringVar(&cfg.ClapSidecarDir, "clap-sidecar-dir", envOrDefault("CLAP_SIDECAR_DIR", "python_sidecar"), "Path to CLAP Python sidecar directory")
+	flag.StringVar(&cfg.SearchText, "search-text", "", "Search indexed tracks by text query (CLAP text-to-audio)")
+	flag.StringVar(&cfg.LibrivoxDenylistPath, "librivox-denylist", envOrDefault("LIBRIVOX_DENYLIST", "data/librivox_denylist.json"), "Path to LibriVox denylist JSON file")
 	flag.Parse()
 
 	return cfg

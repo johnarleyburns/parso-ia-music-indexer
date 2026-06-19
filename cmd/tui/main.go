@@ -19,7 +19,6 @@ import (
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/clap"
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/config"
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/db"
-	"github.com/johnarleyburns/parso-ia-music-indexer/internal/hybrid"
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/ia"
 	ratelimit "github.com/johnarleyburns/parso-ia-music-indexer/internal/rate"
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/tui"
@@ -217,6 +216,15 @@ func coordinatorLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activit
 	client.Transport = tui.NewInstrumentedTransport(metrics)
 	limiter := ratelimit.NewLimiter(cfg.IAApiRate)
 
+	denylist := loadDenylist(cfg.LibrivoxDenylistPath)
+	if len(denylist) > 0 {
+		events <- tui.ActivityEvent{
+			Type:      tui.EventInfo,
+			Timestamp: time.Now(),
+			Message:   fmt.Sprintf("Loaded %d denylist entries from %s", len(denylist), cfg.LibrivoxDenylistPath),
+		}
+	}
+
 	if err := db.ResetAllCollectionsForSync(sqlDB.Conn); err != nil {
 		events <- tui.ActivityEvent{
 			Type:      tui.EventInfo,
@@ -268,7 +276,7 @@ func coordinatorLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activit
 		default:
 		}
 
-		discovered, err := discoverCollection(cfg, sqlDB, client, limiter, events, stopCh, coll, i+1, len(collections))
+		discovered, err := discoverCollection(cfg, sqlDB, client, limiter, events, stopCh, coll, i+1, len(collections), denylist)
 		if err != nil {
 			events <- tui.ActivityEvent{
 				Type:         tui.EventCollectionFailed,
@@ -292,7 +300,7 @@ func coordinatorLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activit
 }
 
 func discoverCollection(cfg *config.Config, sqlDB *db.DB, client *http.Client, limiter *ratelimit.Limiter,
-	events chan<- tui.ActivityEvent, stopCh <-chan struct{}, coll db.Collection, idx, total int) (int, error) {
+	events chan<- tui.ActivityEvent, stopCh <-chan struct{}, coll db.Collection, idx, total int, denylist map[string]bool) (int, error) {
 
 	events <- tui.ActivityEvent{
 		Type:         tui.EventCollectionStarted,
@@ -349,6 +357,8 @@ func discoverCollection(cfg *config.Config, sqlDB *db.DB, client *http.Client, l
 		for i, item := range resp.Items {
 			albums[i] = db.AlbumInsert{Identifier: item.Identifier, Downloads: item.Downloads}
 		}
+
+		albums = filterDenylisted(albums, denylist)
 
 		inserted, err := db.BulkInsertCollectionAlbums(sqlDB.Conn, coll.CollectionID, albums)
 		if err != nil {
@@ -452,6 +462,11 @@ func albumResolverLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-c
 
 func main() {
 	cfg := config.Parse()
+
+	if cfg.SearchText != "" {
+		runTextSearch(cfg)
+		return
+	}
 
 	if cfg.Headless {
 		runHeadless(cfg)
@@ -627,10 +642,8 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 		return
 	}
 
-	hybridVec := hybrid.FuseFeatures(clapVec, mfccVec, chromaVec)
-
 	dbMu.Lock()
-	if err := db.SaveEmbedding(sqlDB.Conn, track.ID, hybridVec, compositeScore); err != nil {
+	if err := db.SaveEmbedding(sqlDB.Conn, track.ID, clapVec, mfccVec, chromaVec, compositeScore); err != nil {
 		errMsg := fmt.Sprintf("save embedding: %v", err)
 		requeued, _ := db.RequeueTrackForRetry(sqlDB.Conn, track.ID, maxTrackRetries, errMsg)
 		dbMu.Unlock()
@@ -762,6 +775,7 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, dbMu *sync.Mute
 			TrackNumber: t.TrackNumber,
 			Format:      t.Format,
 			Bitrate:     t.Bitrate,
+			Duration:    t.Duration,
 			DownloadURL: t.DownloadURL,
 		}
 	}
@@ -880,6 +894,52 @@ func runTUI(cfg *config.Config) {
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+func runTextSearch(cfg *config.Config) {
+	sqlDB, err := db.Open(cfg.DBPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error opening database: %v\n", err)
+		os.Exit(1)
+	}
+	defer sqlDB.Close()
+
+	logDir := filepath.Dir(cfg.DBPath)
+	sidecarProc, clapClient, err := clap.EnsureSidecar(cfg.ClapHost, cfg.ClapPort, cfg.ClapSidecarDir, logDir, func(msg string) {
+		fmt.Fprintf(os.Stderr, "%s\n", msg)
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "CLAP sidecar error: %v\n", err)
+		os.Exit(1)
+	}
+	if sidecarProc != nil {
+		defer sidecarProc.Stop()
+	}
+	defer clapClient.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	textVec, err := clapClient.GetTextEmbedding(ctx, cfg.SearchText)
+	cancel()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "text embedding error: %v\n", err)
+		os.Exit(1)
+	}
+
+	results, err := db.SearchByText(sqlDB.Conn, textVec, 20)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "search error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(results) == 0 {
+		fmt.Println("No results found.")
+		return
+	}
+
+	fmt.Printf("Results for %q (%d matches):\n\n", cfg.SearchText, len(results))
+	for i, r := range results {
+		fmt.Printf("  %2d. %.4f  %s — %s\n", i+1, r.Similarity, r.Title, r.AlbumTitle)
 	}
 }
 

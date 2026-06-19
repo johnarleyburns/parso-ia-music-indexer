@@ -19,7 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CLAPEmbedder_GetEmbedding_FullMethodName = "/clap.CLAPEmbedder/GetEmbedding"
+	CLAPEmbedder_GetEmbedding_FullMethodName     = "/clap.CLAPEmbedder/GetEmbedding"
+	CLAPEmbedder_GetTextEmbedding_FullMethodName = "/clap.CLAPEmbedder/GetTextEmbedding"
 )
 
 // CLAPEmbedderClient is the client API for CLAPEmbedder service.
@@ -29,9 +30,8 @@ const (
 // CLAPEmbedder defines the gRPC contract between the Go orchestrator
 // and the Python neural inference sidecar.
 type CLAPEmbedderClient interface {
-	// GetEmbedding receives raw PCM audio samples and returns a 512-dim
-	// semantic embedding vector from the LAION-CLAP model.
 	GetEmbedding(ctx context.Context, in *EmbeddingRequest, opts ...grpc.CallOption) (*EmbeddingResponse, error)
+	GetTextEmbedding(ctx context.Context, in *TextEmbeddingRequest, opts ...grpc.CallOption) (*EmbeddingResponse, error)
 }
 
 type cLAPEmbedderClient struct {
@@ -52,6 +52,16 @@ func (c *cLAPEmbedderClient) GetEmbedding(ctx context.Context, in *EmbeddingRequ
 	return out, nil
 }
 
+func (c *cLAPEmbedderClient) GetTextEmbedding(ctx context.Context, in *TextEmbeddingRequest, opts ...grpc.CallOption) (*EmbeddingResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmbeddingResponse)
+	err := c.cc.Invoke(ctx, CLAPEmbedder_GetTextEmbedding_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CLAPEmbedderServer is the server API for CLAPEmbedder service.
 // All implementations must embed UnimplementedCLAPEmbedderServer
 // for forward compatibility.
@@ -59,9 +69,8 @@ func (c *cLAPEmbedderClient) GetEmbedding(ctx context.Context, in *EmbeddingRequ
 // CLAPEmbedder defines the gRPC contract between the Go orchestrator
 // and the Python neural inference sidecar.
 type CLAPEmbedderServer interface {
-	// GetEmbedding receives raw PCM audio samples and returns a 512-dim
-	// semantic embedding vector from the LAION-CLAP model.
 	GetEmbedding(context.Context, *EmbeddingRequest) (*EmbeddingResponse, error)
+	GetTextEmbedding(context.Context, *TextEmbeddingRequest) (*EmbeddingResponse, error)
 	mustEmbedUnimplementedCLAPEmbedderServer()
 }
 
@@ -74,6 +83,9 @@ type UnimplementedCLAPEmbedderServer struct{}
 
 func (UnimplementedCLAPEmbedderServer) GetEmbedding(context.Context, *EmbeddingRequest) (*EmbeddingResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetEmbedding not implemented")
+}
+func (UnimplementedCLAPEmbedderServer) GetTextEmbedding(context.Context, *TextEmbeddingRequest) (*EmbeddingResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTextEmbedding not implemented")
 }
 func (UnimplementedCLAPEmbedderServer) mustEmbedUnimplementedCLAPEmbedderServer() {}
 func (UnimplementedCLAPEmbedderServer) testEmbeddedByValue()                      {}
@@ -114,6 +126,24 @@ func _CLAPEmbedder_GetEmbedding_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CLAPEmbedder_GetTextEmbedding_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TextEmbeddingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CLAPEmbedderServer).GetTextEmbedding(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CLAPEmbedder_GetTextEmbedding_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CLAPEmbedderServer).GetTextEmbedding(ctx, req.(*TextEmbeddingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CLAPEmbedder_ServiceDesc is the grpc.ServiceDesc for CLAPEmbedder service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -124,6 +154,10 @@ var CLAPEmbedder_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetEmbedding",
 			Handler:    _CLAPEmbedder_GetEmbedding_Handler,
+		},
+		{
+			MethodName: "GetTextEmbedding",
+			Handler:    _CLAPEmbedder_GetTextEmbedding_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

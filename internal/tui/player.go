@@ -429,7 +429,7 @@ func (m PlayerModel) loadStatsCmd() tea.Cmd {
 	sqlDB := m.DB
 	return func() tea.Msg {
 		var stats playerStatsMsg
-		_, quality, err := db.GetEmbedding(sqlDB, trackID)
+		_, _, _, quality, err := db.GetEmbedding(sqlDB, trackID)
 		if err == nil {
 			stats.Quality = quality
 		}

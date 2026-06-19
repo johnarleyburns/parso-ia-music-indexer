@@ -88,3 +88,41 @@ func TestNewGRPCClientUnreachable(t *testing.T) {
 		t.Fatal("expected error for unreachable host, got nil")
 	}
 }
+
+func TestMockClientTextEmbeddingDimensions(t *testing.T) {
+	c := NewMockClient()
+	vec, err := c.GetTextEmbedding(context.Background(), "melancholy piano")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(vec) != 512 {
+		t.Fatalf("expected 512 dimensions, got %d", len(vec))
+	}
+}
+
+func TestMockClientTextEmbeddingNonZeroNorm(t *testing.T) {
+	c := NewMockClient()
+	vec, err := c.GetTextEmbedding(context.Background(), "test query")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var sum float64
+	for _, v := range vec {
+		sum += float64(v) * float64(v)
+	}
+	norm := math.Sqrt(sum)
+	if norm < 0.99 || norm > 1.01 {
+		t.Fatalf("expected unit norm, got %f", norm)
+	}
+}
+
+func TestMockClientTextEmbeddingDeterministic(t *testing.T) {
+	c := NewMockClient()
+	vec1, _ := c.GetTextEmbedding(context.Background(), "query a")
+	vec2, _ := c.GetTextEmbedding(context.Background(), "query b")
+	for i := range vec1 {
+		if vec1[i] != vec2[i] {
+			t.Fatalf("position %d: %f != %f", i, vec1[i], vec2[i])
+		}
+	}
+}

@@ -58,6 +58,16 @@ func (c *grpcCLAPClient) GetEmbedding(ctx context.Context, pcmData []byte, sampl
 	return resp.GetEmbedding(), nil
 }
 
+func (c *grpcCLAPClient) GetTextEmbedding(ctx context.Context, text string) ([]float32, error) {
+	resp, err := c.client.GetTextEmbedding(ctx, &pb.TextEmbeddingRequest{
+		Text: text,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("clap grpc text: %w", err)
+	}
+	return resp.GetEmbedding(), nil
+}
+
 func (c *grpcCLAPClient) HealthCheck(ctx context.Context) error {
 	_, err := c.client.GetEmbedding(ctx, &pb.EmbeddingRequest{
 		PcmData:    make([]byte, 4),

@@ -7,9 +7,8 @@ option go_package = "github.com/johnarleyburns/parso-ia-music-indexer/internal/c
 // CLAPEmbedder defines the gRPC contract between the Go orchestrator
 // and the Python neural inference sidecar.
 service CLAPEmbedder {
-  // GetEmbedding receives raw PCM audio samples and returns a 512-dim
-  // semantic embedding vector from the LAION-CLAP model.
   rpc GetEmbedding (EmbeddingRequest) returns (EmbeddingResponse);
+  rpc GetTextEmbedding (TextEmbeddingRequest) returns (EmbeddingResponse);
 }
 
 message EmbeddingRequest {
@@ -20,6 +19,9 @@ message EmbeddingRequest {
 }
 
 message EmbeddingResponse {
-  // 512-dimensional semantic embedding vector.
   repeated float embedding = 1;
+}
+
+message TextEmbeddingRequest {
+  string text = 1;
 }

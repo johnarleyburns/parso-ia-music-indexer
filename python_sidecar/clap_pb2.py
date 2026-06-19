@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\nclap.proto\x12\x04\x63lap\"9\n\x10\x45mbeddingRequest\x12\x10\n\x08pcm_data\x18\x01 \x01(\x0c\x12\x13\n\x0bsample_rate\x18\x02 \x01(\x05\"&\n\x11\x45mbeddingResponse\x12\x11\n\tembedding\x18\x01 \x03(\x02\x32O\n\x0c\x43LAPEmbedder\x12?\n\x0cGetEmbedding\x12\x16.clap.EmbeddingRequest\x1a\x17.clap.EmbeddingResponseBKZIgithub.com/johnarleyburns/parso-ia-music-indexer/internal/clap/clap_protob\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\nclap.proto\x12\x04\x63lap\"9\n\x10\x45mbeddingRequest\x12\x10\n\x08pcm_data\x18\x01 \x01(\x0c\x12\x13\n\x0bsample_rate\x18\x02 \x01(\x05\"&\n\x11\x45mbeddingResponse\x12\x11\n\tembedding\x18\x01 \x03(\x02\"$\n\x14TextEmbeddingRequest\x12\x0c\n\x04text\x18\x01 \x01(\t2\x98\x01\n\x0c\x43LAPEmbedder\x12?\n\x0cGetEmbedding\x12\x16.clap.EmbeddingRequest\x1a\x17.clap.EmbeddingResponse\x12G\n\x10GetTextEmbedding\x12\x1a.clap.TextEmbeddingRequest\x1a\x17.clap.EmbeddingResponseBKZIgithub.com/johnarleyburns/parso-ia-music-indexer/internal/clap/clap_protob\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -36,6 +36,8 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_EMBEDDINGREQUEST']._serialized_end=77
   _globals['_EMBEDDINGRESPONSE']._serialized_start=79
   _globals['_EMBEDDINGRESPONSE']._serialized_end=117
-  _globals['_CLAPEMBEDDER']._serialized_start=119
-  _globals['_CLAPEMBEDDER']._serialized_end=198
+  _globals['_TEXTEMBEDDINGREQUEST']._serialized_start=119
+  _globals['_TEXTEMBEDDINGREQUEST']._serialized_end=155
+  _globals['_CLAPEMBEDDER']._serialized_start=158
+  _globals['_CLAPEMBEDDER']._serialized_end=310
 # @@protoc_insertion_point(module_scope)

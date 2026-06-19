@@ -41,6 +41,7 @@ type TrackInsert struct {
 	TrackNumber int
 	Format      string
 	Bitrate     int
+	Duration    float64
 	DownloadURL string
 }
 
@@ -356,8 +357,8 @@ func InsertTracks(db *sql.DB, albumID string, tracks []TrackInsert) (int, error)
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO tracks(album_id, filename, title, track_number, format, bitrate, download_url)
-		VALUES(?, ?, ?, ?, ?, ?, ?)`)
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO tracks(album_id, filename, title, track_number, format, bitrate, duration, download_url)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare: %w", err)
 	}
@@ -365,7 +366,7 @@ func InsertTracks(db *sql.DB, albumID string, tracks []TrackInsert) (int, error)
 
 	var inserted int
 	for _, t := range tracks {
-		res, err := stmt.Exec(albumID, t.Filename, t.Title, t.TrackNumber, t.Format, t.Bitrate, t.DownloadURL)
+		res, err := stmt.Exec(albumID, t.Filename, t.Title, t.TrackNumber, t.Format, t.Bitrate, t.Duration, t.DownloadURL)
 		if err != nil {
 			return inserted, fmt.Errorf("insert track %s: %w", t.Filename, err)
 		}

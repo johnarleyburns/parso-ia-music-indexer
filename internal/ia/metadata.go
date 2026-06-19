@@ -54,6 +54,11 @@ func LookupAlbumMetadata(ctx context.Context, client *http.Client, identifier st
 			continue
 		}
 
+		duration := parseDuration(f.Length)
+		if duration > MaxTrackDurationSec {
+			continue
+		}
+
 		trackNum := parseTrackNumber(f.Track)
 		title := f.Title
 		if title == "" {
@@ -67,6 +72,7 @@ func LookupAlbumMetadata(ctx context.Context, client *http.Client, identifier st
 			TrackNumber: trackNum,
 			Format:      f.Format,
 			Bitrate:     bitrate,
+			Duration:    duration,
 			DownloadURL: fmt.Sprintf("https://archive.org/download/%s/%s", identifier, url.PathEscape(f.Name)),
 		})
 	}

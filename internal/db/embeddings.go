@@ -5,6 +5,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sort"
+
+	"github.com/johnarleyburns/parso-ia-music-indexer/internal/hybrid"
+	"github.com/x448/float16"
 )
 
 type SimilarTrack struct {
@@ -23,24 +27,27 @@ type candidate struct {
 	dist    float64
 }
 
-func SaveEmbedding(db *sql.DB, trackID int, embedding []float32, qualityScore float64) error {
-	blob := encodeF32(embedding)
+func SaveEmbedding(db *sql.DB, trackID int, clap, mfcc, chroma []float32, qualityScore float64) error {
+	clapBlob := encodeF16(l2Normalize(clap))
+	mfccBlob := encodeF16(l2Normalize(mfcc))
+	chromaBlob := encodeF16(l2Normalize(chroma))
 	_, err := db.Exec(
-		`INSERT OR REPLACE INTO track_embeddings(track_id, embedding, quality_score) VALUES(?, ?, ?)`,
-		trackID, blob, qualityScore,
+		`INSERT OR REPLACE INTO track_embeddings(track_id, clap, mfcc, chroma, quality_score) VALUES(?, ?, ?, ?, ?)`,
+		trackID, clapBlob, mfccBlob, chromaBlob, qualityScore,
 	)
 	return err
 }
 
 func QuerySimilar(db *sql.DB, trackID int, limit int) ([]SimilarTrack, error) {
-	var queryBlob []byte
-	err := db.QueryRow(`SELECT embedding FROM track_embeddings WHERE track_id = ?`, trackID).Scan(&queryBlob)
+	var qClap, qMfcc, qChroma []byte
+	err := db.QueryRow(`SELECT clap, mfcc, chroma FROM track_embeddings WHERE track_id = ?`, trackID).
+		Scan(&qClap, &qMfcc, &qChroma)
 	if err != nil {
 		return nil, fmt.Errorf("query embedding: %w", err)
 	}
-	queryVec := decodeF32(queryBlob)
+	queryVec := hybrid.FuseFeatures(decodeF16(qClap), decodeF16(qMfcc), decodeF16(qChroma))
 
-	rows, err := db.Query(`SELECT e.track_id, COALESCE(t.title, t.filename), t.album_id, e.embedding, e.quality_score
+	rows, err := db.Query(`SELECT e.track_id, COALESCE(t.title, t.filename), t.album_id, e.clap, e.mfcc, e.chroma, e.quality_score
 		FROM track_embeddings e
 		INNER JOIN tracks t ON e.track_id = t.id
 		WHERE e.track_id != ?`, trackID)
@@ -53,14 +60,11 @@ func QuerySimilar(db *sql.DB, trackID int, limit int) ([]SimilarTrack, error) {
 
 	for rows.Next() {
 		var c candidate
-		var blob []byte
-		if err := rows.Scan(&c.trackID, &c.title, &c.albumID, &blob, &c.quality); err != nil {
+		var cBlob, mBlob, chBlob []byte
+		if err := rows.Scan(&c.trackID, &c.title, &c.albumID, &cBlob, &mBlob, &chBlob, &c.quality); err != nil {
 			return nil, err
 		}
-		vec := decodeF32(blob)
-		if len(vec) != len(queryVec) {
-			continue
-		}
+		vec := hybrid.FuseFeatures(decodeF16(cBlob), decodeF16(mBlob), decodeF16(chBlob))
 		c.dist = cosineDistance(queryVec, vec)
 		candidates = append(candidates, c)
 	}
@@ -93,14 +97,74 @@ func GetEmbeddingCount(db *sql.DB) (int, error) {
 	return count, err
 }
 
-func GetEmbedding(db *sql.DB, trackID int) ([]float32, float64, error) {
-	var blob []byte
-	var qs float64
-	err := db.QueryRow(`SELECT embedding, quality_score FROM track_embeddings WHERE track_id = ?`, trackID).Scan(&blob, &qs)
+func GetEmbedding(db *sql.DB, trackID int) (clap, mfcc, chroma []float32, quality float64, err error) {
+	var clapBlob, mfccBlob, chromaBlob []byte
+	err = db.QueryRow(`SELECT clap, mfcc, chroma, quality_score FROM track_embeddings WHERE track_id = ?`, trackID).
+		Scan(&clapBlob, &mfccBlob, &chromaBlob, &quality)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, nil, 0, err
 	}
-	return decodeF32(blob), qs, nil
+	return decodeF16(clapBlob), decodeF16(mfccBlob), decodeF16(chromaBlob), quality, nil
+}
+
+type TextSearchResult struct {
+	TrackID      int
+	Title        string
+	AlbumID      string
+	AlbumTitle   string
+	QualityScore float64
+	Similarity   float64
+}
+
+func SearchByText(db *sql.DB, queryVec []float32, limit int) ([]TextSearchResult, error) {
+	qv := l2Normalize(queryVec)
+
+	rows, err := db.Query(`SELECT e.track_id, COALESCE(t.title, t.filename), t.album_id,
+			COALESCE(a.title, a.ia_identifier), e.clap, e.quality_score
+		FROM track_embeddings e
+		INNER JOIN tracks t ON e.track_id = t.id
+		INNER JOIN albums a ON t.album_id = a.ia_identifier
+		WHERE t.status = 'completed'`)
+	if err != nil {
+		return nil, fmt.Errorf("search by text: %w", err)
+	}
+	defer rows.Close()
+
+	var results []TextSearchResult
+	for rows.Next() {
+		var r TextSearchResult
+		var clapBlob []byte
+		if err := rows.Scan(&r.TrackID, &r.Title, &r.AlbumID, &r.AlbumTitle, &clapBlob, &r.QualityScore); err != nil {
+			return nil, err
+		}
+		clapVec := decodeF16(clapBlob)
+		r.Similarity = dotProduct(qv, clapVec)
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Similarity > results[j].Similarity
+	})
+
+	if limit > 0 && limit < len(results) {
+		results = results[:limit]
+	}
+	return results, nil
+}
+
+func dotProduct(a, b []float32) float64 {
+	var sum float64
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		sum += float64(a[i]) * float64(b[i])
+	}
+	return sum
 }
 
 func encodeF32(v []float32) []byte {
@@ -115,6 +179,40 @@ func decodeF32(b []byte) []float32 {
 	v := make([]float32, len(b)/4)
 	for i := range v {
 		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
+	}
+	return v
+}
+
+func l2Normalize(v []float32) []float32 {
+	var sum float64
+	for _, f := range v {
+		sum += float64(f) * float64(f)
+	}
+	norm := math.Sqrt(sum)
+	out := make([]float32, len(v))
+	if norm == 0 {
+		return out
+	}
+	for i, f := range v {
+		out[i] = float32(float64(f) / norm)
+	}
+	return out
+}
+
+func encodeF16(v []float32) []byte {
+	buf := make([]byte, len(v)*2)
+	for i, f := range v {
+		h := float16.Fromfloat32(f)
+		binary.LittleEndian.PutUint16(buf[i*2:], h.Bits())
+	}
+	return buf
+}
+
+func decodeF16(b []byte) []float32 {
+	v := make([]float32, len(b)/2)
+	for i := range v {
+		bits := binary.LittleEndian.Uint16(b[i*2:])
+		v[i] = float16.Frombits(bits).Float32()
 	}
 	return v
 }

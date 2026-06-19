@@ -279,7 +279,31 @@ func TestResetStuckTracks(t *testing.T) {
 	}
 }
 
-func setupTrackWithEmbedding(t *testing.T, db *DB, albumID, filename, title string, trackNum int, vec []float32, quality float64) int {
+func makeTestClap(fill float32) []float32 {
+	v := make([]float32, 512)
+	for i := range v {
+		v[i] = fill
+	}
+	return v
+}
+
+func makeTestMfcc(fill float32) []float32 {
+	v := make([]float32, 40)
+	for i := range v {
+		v[i] = fill
+	}
+	return v
+}
+
+func makeTestChroma(fill float32) []float32 {
+	v := make([]float32, 12)
+	for i := range v {
+		v[i] = fill
+	}
+	return v
+}
+
+func setupTrackWithEmbedding(t *testing.T, db *DB, albumID, filename, title string, trackNum int, clap, mfcc, chroma []float32, quality float64) int {
 	t.Helper()
 	BulkInsertAlbums(db.Conn, testAlbumInserts(albumID))
 	MarkAlbumResolved(db.Conn, albumID, albumID, "", "", "", 0)
@@ -291,79 +315,84 @@ func setupTrackWithEmbedding(t *testing.T, db *DB, albumID, filename, title stri
 		t.Fatal("no tracks claimed")
 	}
 	MarkTrackCompleted(db.Conn, claimed[0].ID)
-	SaveEmbedding(db.Conn, claimed[0].ID, vec, quality)
+	SaveEmbedding(db.Conn, claimed[0].ID, clap, mfcc, chroma, quality)
 	return claimed[0].ID
 }
 
 func TestEmbeddingRoundtrip(t *testing.T) {
 	db := testDB(t)
-	vec := make([]float32, 40)
-	for i := range vec {
-		vec[i] = float32(i) * 0.1
+
+	clap := make([]float32, 512)
+	mfcc := make([]float32, 40)
+	chroma := make([]float32, 12)
+	for i := range clap {
+		clap[i] = float32(i-256) / 512.0
+	}
+	for i := range mfcc {
+		mfcc[i] = float32(i) * 0.1
+	}
+	for i := range chroma {
+		chroma[i] = float32(i) * 0.08
 	}
 
-	trackID := setupTrackWithEmbedding(t, db, "album-a", "song.mp3", "Song", 1, vec, 24.5)
+	trackID := setupTrackWithEmbedding(t, db, "album-a", "song.mp3", "Song", 1, clap, mfcc, chroma, 24.5)
 
-	got, qs, err := GetEmbedding(db.Conn, trackID)
+	gotClap, gotMfcc, gotChroma, qs, err := GetEmbedding(db.Conn, trackID)
 	if err != nil {
 		t.Fatalf("GetEmbedding: %v", err)
 	}
-	if len(got) != 40 {
-		t.Errorf("expected 40 dims, got %d", len(got))
+	if len(gotClap) != 512 {
+		t.Errorf("expected 512 clap dims, got %d", len(gotClap))
+	}
+	if len(gotMfcc) != 40 {
+		t.Errorf("expected 40 mfcc dims, got %d", len(gotMfcc))
+	}
+	if len(gotChroma) != 12 {
+		t.Errorf("expected 12 chroma dims, got %d", len(gotChroma))
 	}
 	if qs != 24.5 {
 		t.Errorf("expected quality 24.5, got %f", qs)
 	}
-	for i := range vec {
-		if got[i] != vec[i] {
-			t.Errorf("dim[%d]: expected %f, got %f", i, vec[i], got[i])
-		}
-	}
 }
 
-func TestEmbeddingRoundtrip564Dim(t *testing.T) {
+func TestEmbeddingBlobSizes(t *testing.T) {
 	db := testDB(t)
-	vec := make([]float32, 564)
-	for i := range vec {
-		vec[i] = float32(i%100) / 100.0
-	}
 
-	trackID := setupTrackWithEmbedding(t, db, "album-564", "song564.mp3", "Song 564", 1, vec, 0.75)
+	clap := makeTestClap(0.5)
+	mfcc := makeTestMfcc(0.5)
+	chroma := makeTestChroma(0.5)
 
-	got, qs, err := GetEmbedding(db.Conn, trackID)
-	if err != nil {
-		t.Fatal(err)
+	setupTrackWithEmbedding(t, db, "album-sz", "sz.mp3", "Size", 1, clap, mfcc, chroma, 0.5)
+
+	var clapBlob, mfccBlob, chromaBlob []byte
+	db.Conn.QueryRow(`SELECT clap, mfcc, chroma FROM track_embeddings WHERE track_id = 1`).
+		Scan(&clapBlob, &mfccBlob, &chromaBlob)
+
+	if len(clapBlob) != 1024 {
+		t.Errorf("expected 1024 bytes for clap f16, got %d", len(clapBlob))
 	}
-	if len(got) != 564 {
-		t.Fatalf("expected 564 dims, got %d", len(got))
+	if len(mfccBlob) != 80 {
+		t.Errorf("expected 80 bytes for mfcc f16, got %d", len(mfccBlob))
 	}
-	for i := range vec {
-		if got[i] != vec[i] {
-			t.Errorf("dim[%d]: expected %f, got %f", i, vec[i], got[i])
-		}
-	}
-	if qs != 0.75 {
-		t.Errorf("expected quality 0.75, got %f", qs)
+	if len(chromaBlob) != 24 {
+		t.Errorf("expected 24 bytes for chroma f16, got %d", len(chromaBlob))
 	}
 }
 
 func TestQuerySimilar(t *testing.T) {
 	db := testDB(t)
-	vec1 := make([]float32, 40)
-	vec2 := make([]float32, 40)
-	vec3 := make([]float32, 40)
-	vec4 := make([]float32, 40)
-	for i := 0; i < 40; i++ {
-		vec1[i] = 1
-		vec2[i] = 1
-		vec3[i] = -1
-		vec4[i] = 0.5
-	}
 
-	id1 := setupTrackWithEmbedding(t, db, "album-1", "t1.mp3", "Track 1", 1, vec1, 30.0)
-	setupTrackWithEmbedding(t, db, "album-2", "t2.mp3", "Track 2", 1, vec2, 25.0)
-	setupTrackWithEmbedding(t, db, "album-3", "t3.mp3", "Track 3", 1, vec3, 15.0)
-	setupTrackWithEmbedding(t, db, "album-4", "t4.mp3", "Track 4", 1, vec4, 20.0)
+	clap1 := makeTestClap(1)
+	clap2 := makeTestClap(1)
+	clap3 := makeTestClap(-1)
+	clap4 := makeTestClap(0.5)
+	mfcc := makeTestMfcc(0)
+	chroma := makeTestChroma(0)
+
+	id1 := setupTrackWithEmbedding(t, db, "album-1", "t1.mp3", "Track 1", 1, clap1, mfcc, chroma, 30.0)
+	setupTrackWithEmbedding(t, db, "album-2", "t2.mp3", "Track 2", 1, clap2, mfcc, chroma, 25.0)
+	setupTrackWithEmbedding(t, db, "album-3", "t3.mp3", "Track 3", 1, clap3, mfcc, chroma, 15.0)
+	setupTrackWithEmbedding(t, db, "album-4", "t4.mp3", "Track 4", 1, clap4, mfcc, chroma, 20.0)
 
 	results, err := QuerySimilar(db.Conn, id1, 5)
 	if err != nil {
@@ -376,7 +405,7 @@ func TestQuerySimilar(t *testing.T) {
 	if results[0].Title != "Track 2" {
 		t.Errorf("expected Track 2 closest, got %s (dist=%f)", results[0].Title, results[0].Distance)
 	}
-	if results[0].Distance > 0.001 {
+	if results[0].Distance > 0.01 {
 		t.Errorf("expected distance ~0 for identical, got %f", results[0].Distance)
 	}
 	if results[2].Title != "Track 3" {
@@ -415,26 +444,6 @@ func TestEncodeDecodeF32(t *testing.T) {
 	}
 }
 
-func TestMixedDimensionSkipped(t *testing.T) {
-	db := testDB(t)
-	vec40 := make([]float32, 40)
-	vec564 := make([]float32, 564)
-	for i := range vec564 {
-		vec564[i] = 1.0
-	}
-
-	setupTrackWithEmbedding(t, db, "album-old", "old.mp3", "Old", 1, vec40, 0.5)
-	id564 := setupTrackWithEmbedding(t, db, "album-new", "new.mp3", "New", 1, vec564, 0.5)
-
-	results, err := QuerySimilar(db.Conn, id564, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) > 0 {
-		t.Errorf("expected no results (40-dim skipped), got %d", len(results))
-	}
-}
-
 func TestSearchCompletedTracksEmpty(t *testing.T) {
 	db := testDB(t)
 	tracks, total, err := SearchCompletedTracks(db.Conn, "", 50, 0)
@@ -449,10 +458,12 @@ func TestSearchCompletedTracksEmpty(t *testing.T) {
 func TestSearchCompletedTracks(t *testing.T) {
 	db := testDB(t)
 
-	vec := make([]float32, 40)
-	setupTrackWithEmbedding(t, db, "etree:gd-1977", "dark-star.mp3", "Dark Star", 1, vec, 0.85)
-	setupTrackWithEmbedding(t, db, "georgeblood:victor", "herbert.mp3", "Herbert", 1, vec, 0.72)
-	setupTrackWithEmbedding(t, db, "etree:ph-1999", "tweezer.mp3", "Tweezer", 1, vec, 0.91)
+	clap := makeTestClap(0)
+	mfcc := makeTestMfcc(0)
+	chroma := makeTestChroma(0)
+	setupTrackWithEmbedding(t, db, "etree:gd-1977", "dark-star.mp3", "Dark Star", 1, clap, mfcc, chroma, 0.85)
+	setupTrackWithEmbedding(t, db, "georgeblood:victor", "herbert.mp3", "Herbert", 1, clap, mfcc, chroma, 0.72)
+	setupTrackWithEmbedding(t, db, "etree:ph-1999", "tweezer.mp3", "Tweezer", 1, clap, mfcc, chroma, 0.91)
 
 	tracks, total, err := SearchCompletedTracks(db.Conn, "", 50, 0)
 	if err != nil {
@@ -673,5 +684,168 @@ func TestRemoveCollection(t *testing.T) {
 	db.Conn.QueryRow(`SELECT count(*) FROM collection_albums WHERE collection_id='to-remove'`).Scan(&linkCount)
 	if linkCount != 0 {
 		t.Errorf("expected 0 links after removal, got %d", linkCount)
+	}
+}
+
+func TestEncodeDecodeF16Roundtrip(t *testing.T) {
+	orig := []float32{0.0, 0.5, -0.5, 1.0, -1.0, 0.123, -0.987}
+	blob := encodeF16(orig)
+	decoded := decodeF16(blob)
+	if len(decoded) != len(orig) {
+		t.Fatalf("expected %d elements, got %d", len(orig), len(decoded))
+	}
+	for i := range orig {
+		diff := math.Abs(float64(decoded[i] - orig[i]))
+		if diff > 1e-3 {
+			t.Errorf("dim[%d]: expected %f, got %f (diff=%e)", i, orig[i], decoded[i], diff)
+		}
+	}
+}
+
+func TestEncodeF16BlobSize(t *testing.T) {
+	v := make([]float32, 512)
+	blob := encodeF16(v)
+	if len(blob) != 1024 {
+		t.Errorf("expected 1024 bytes for 512 dims, got %d", len(blob))
+	}
+}
+
+func TestEncodeDecodeF16Zero(t *testing.T) {
+	v := make([]float32, 10)
+	decoded := decodeF16(encodeF16(v))
+	for i, f := range decoded {
+		if f != 0 {
+			t.Errorf("dim[%d]: expected 0, got %f", i, f)
+		}
+	}
+}
+
+func TestEncodeDecodeF16Negative(t *testing.T) {
+	v := []float32{-0.1, -0.5, -1.0}
+	decoded := decodeF16(encodeF16(v))
+	for i := range v {
+		if decoded[i] >= 0 {
+			t.Errorf("dim[%d]: expected negative, got %f", i, decoded[i])
+		}
+	}
+}
+
+func TestEncodeDecodeF16NormalizedCLAPValues(t *testing.T) {
+	v := make([]float32, 512)
+	for i := range v {
+		v[i] = float32(i-256) / 512.0
+	}
+	v = l2Normalize(v)
+	decoded := decodeF16(encodeF16(v))
+	for i := range v {
+		diff := math.Abs(float64(decoded[i] - v[i]))
+		if diff > 1e-3 {
+			t.Errorf("dim[%d]: expected %f, got %f (diff=%e)", i, v[i], decoded[i], diff)
+		}
+	}
+}
+
+func TestL2Normalize(t *testing.T) {
+	v := []float32{3, 4}
+	normed := l2Normalize(v)
+	var sum float64
+	for _, f := range normed {
+		sum += float64(f) * float64(f)
+	}
+	if math.Abs(sum-1.0) > 1e-6 {
+		t.Errorf("expected unit norm, got %f", math.Sqrt(sum))
+	}
+	if math.Abs(float64(normed[0])-0.6) > 1e-6 || math.Abs(float64(normed[1])-0.8) > 1e-6 {
+		t.Errorf("expected [0.6, 0.8], got %v", normed)
+	}
+}
+
+func TestL2NormalizeZero(t *testing.T) {
+	v := make([]float32, 5)
+	normed := l2Normalize(v)
+	for i, f := range normed {
+		if f != 0 {
+			t.Errorf("dim[%d]: expected 0, got %f", i, f)
+		}
+	}
+}
+
+func TestL2NormalizeIdempotent(t *testing.T) {
+	v := []float32{0.6, 0.8}
+	once := l2Normalize(v)
+	twice := l2Normalize(once)
+	for i := range once {
+		diff := math.Abs(float64(twice[i] - once[i]))
+		if diff > 1e-6 {
+			t.Errorf("dim[%d]: not idempotent: %f vs %f", i, once[i], twice[i])
+		}
+	}
+}
+
+func TestDotProduct(t *testing.T) {
+	a := []float32{1, 0, 0}
+	b := []float32{0, 1, 0}
+	if d := dotProduct(a, b); math.Abs(d) > 1e-6 {
+		t.Errorf("expected 0 for orthogonal, got %f", d)
+	}
+	if d := dotProduct(a, a); math.Abs(d-1.0) > 1e-6 {
+		t.Errorf("expected 1 for self, got %f", d)
+	}
+}
+
+func TestDotProductNormalized(t *testing.T) {
+	a := l2Normalize([]float32{3, 4})
+	b := l2Normalize([]float32{3, 4})
+	d := dotProduct(a, b)
+	if math.Abs(d-1.0) > 1e-5 {
+		t.Errorf("expected ~1 for identical unit vectors, got %f", d)
+	}
+}
+
+func TestSearchByText(t *testing.T) {
+	db := testDB(t)
+
+	clap1 := make([]float32, 512)
+	clap1[0] = 1.0
+	clap2 := make([]float32, 512)
+	clap2[1] = 1.0
+	clap3 := make([]float32, 512)
+	clap3[0] = 0.9
+	clap3[1] = 0.1
+	mfcc := makeTestMfcc(0)
+	chroma := makeTestChroma(0)
+
+	setupTrackWithEmbedding(t, db, "album-1", "t1.mp3", "Target Track", 1, clap1, mfcc, chroma, 0.9)
+	setupTrackWithEmbedding(t, db, "album-2", "t2.mp3", "Other Track", 1, clap2, mfcc, chroma, 0.8)
+	setupTrackWithEmbedding(t, db, "album-3", "t3.mp3", "Similar Track", 1, clap3, mfcc, chroma, 0.7)
+
+	queryVec := make([]float32, 512)
+	queryVec[0] = 1.0
+
+	results, err := SearchByText(db.Conn, queryVec, 10)
+	if err != nil {
+		t.Fatalf("SearchByText: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
+	}
+	if results[0].Title != "Target Track" {
+		t.Errorf("expected Target Track first, got %s (sim=%f)", results[0].Title, results[0].Similarity)
+	}
+	if results[0].Similarity < results[1].Similarity {
+		t.Errorf("expected results sorted by similarity descending")
+	}
+}
+
+func TestSearchByTextEmpty(t *testing.T) {
+	db := testDB(t)
+	queryVec := make([]float32, 512)
+	queryVec[0] = 1.0
+	results, err := SearchByText(db.Conn, queryVec, 10)
+	if err != nil {
+		t.Fatalf("SearchByText empty: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected 0 results, got %d", len(results))
 	}
 }

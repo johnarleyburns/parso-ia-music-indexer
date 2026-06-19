@@ -76,9 +76,8 @@ func (x *EmbeddingRequest) GetSampleRate() int32 {
 }
 
 type EmbeddingResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// 512-dimensional semantic embedding vector.
-	Embedding     []float32 `protobuf:"fixed32,1,rep,packed,name=embedding,proto3" json:"embedding,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Embedding     []float32              `protobuf:"fixed32,1,rep,packed,name=embedding,proto3" json:"embedding,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -120,6 +119,50 @@ func (x *EmbeddingResponse) GetEmbedding() []float32 {
 	return nil
 }
 
+type TextEmbeddingRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TextEmbeddingRequest) Reset() {
+	*x = TextEmbeddingRequest{}
+	mi := &file_proto_clap_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TextEmbeddingRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TextEmbeddingRequest) ProtoMessage() {}
+
+func (x *TextEmbeddingRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_clap_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TextEmbeddingRequest.ProtoReflect.Descriptor instead.
+func (*TextEmbeddingRequest) Descriptor() ([]byte, []int) {
+	return file_proto_clap_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *TextEmbeddingRequest) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
 var File_proto_clap_proto protoreflect.FileDescriptor
 
 const file_proto_clap_proto_rawDesc = "" +
@@ -130,9 +173,12 @@ const file_proto_clap_proto_rawDesc = "" +
 	"\vsample_rate\x18\x02 \x01(\x05R\n" +
 	"sampleRate\"1\n" +
 	"\x11EmbeddingResponse\x12\x1c\n" +
-	"\tembedding\x18\x01 \x03(\x02R\tembedding2O\n" +
+	"\tembedding\x18\x01 \x03(\x02R\tembedding\"*\n" +
+	"\x14TextEmbeddingRequest\x12\x12\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text2\x98\x01\n" +
 	"\fCLAPEmbedder\x12?\n" +
-	"\fGetEmbedding\x12\x16.clap.EmbeddingRequest\x1a\x17.clap.EmbeddingResponseBKZIgithub.com/johnarleyburns/parso-ia-music-indexer/internal/clap/clap_protob\x06proto3"
+	"\fGetEmbedding\x12\x16.clap.EmbeddingRequest\x1a\x17.clap.EmbeddingResponse\x12G\n" +
+	"\x10GetTextEmbedding\x12\x1a.clap.TextEmbeddingRequest\x1a\x17.clap.EmbeddingResponseBKZIgithub.com/johnarleyburns/parso-ia-music-indexer/internal/clap/clap_protob\x06proto3"
 
 var (
 	file_proto_clap_proto_rawDescOnce sync.Once
@@ -146,16 +192,19 @@ func file_proto_clap_proto_rawDescGZIP() []byte {
 	return file_proto_clap_proto_rawDescData
 }
 
-var file_proto_clap_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_proto_clap_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_proto_clap_proto_goTypes = []any{
-	(*EmbeddingRequest)(nil),  // 0: clap.EmbeddingRequest
-	(*EmbeddingResponse)(nil), // 1: clap.EmbeddingResponse
+	(*EmbeddingRequest)(nil),     // 0: clap.EmbeddingRequest
+	(*EmbeddingResponse)(nil),    // 1: clap.EmbeddingResponse
+	(*TextEmbeddingRequest)(nil), // 2: clap.TextEmbeddingRequest
 }
 var file_proto_clap_proto_depIdxs = []int32{
 	0, // 0: clap.CLAPEmbedder.GetEmbedding:input_type -> clap.EmbeddingRequest
-	1, // 1: clap.CLAPEmbedder.GetEmbedding:output_type -> clap.EmbeddingResponse
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
+	2, // 1: clap.CLAPEmbedder.GetTextEmbedding:input_type -> clap.TextEmbeddingRequest
+	1, // 2: clap.CLAPEmbedder.GetEmbedding:output_type -> clap.EmbeddingResponse
+	1, // 3: clap.CLAPEmbedder.GetTextEmbedding:output_type -> clap.EmbeddingResponse
+	2, // [2:4] is the sub-list for method output_type
+	0, // [0:2] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -172,7 +221,7 @@ func file_proto_clap_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_clap_proto_rawDesc), len(file_proto_clap_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
