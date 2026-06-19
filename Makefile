@@ -1,4 +1,4 @@
-.PHONY: build run headless clean proto test test-sidecar
+.PHONY: build run headless clean proto test test-sidecar ci install-hooks
 
 build:
 	go build -o bin/timbre ./cmd/tui
@@ -11,6 +11,14 @@ headless: build
 
 test:
 	go test ./...
+
+ci: build
+	go vet ./...
+	go test -race -count=1 ./...
+
+install-hooks:
+	git config core.hooksPath .githooks
+	@echo "Git hooks installed from .githooks/"
 
 test-sidecar:
 	cd python_sidecar && .venv/bin/python test_inference.py
