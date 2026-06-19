@@ -29,7 +29,6 @@ type QueueItem struct {
 	Title       string
 	AlbumID     string
 	AlbumTitle  string
-	ArtURL      string
 	DownloadURL string
 }
 
@@ -70,10 +69,6 @@ type PlayerModel struct {
 	Width       int
 	Height      int
 
-	artCache     *ArtCache
-	currentArt   string
-	currentArtID string
-
 	trackQuality    float64
 	trackCollection string
 	trackCreator    string
@@ -81,12 +76,11 @@ type PlayerModel struct {
 	similarCursor   int
 }
 
-func NewPlayerModel(sqlDB *sql.DB, artCache *ArtCache) PlayerModel {
+func NewPlayerModel(sqlDB *sql.DB) PlayerModel {
 	return PlayerModel{
 		engine:      NewPlayerEngine(),
 		volumeLevel: 0.8,
 		DB:          sqlDB,
-		artCache:    artCache,
 	}
 }
 
@@ -102,32 +96,14 @@ func (m PlayerModel) Update(msg tea.Msg) (PlayerModel, tea.Cmd) {
 			Title:       msg.Title,
 			AlbumID:     msg.AlbumID,
 			AlbumTitle:  msg.AlbumTitle,
-			ArtURL:      msg.ArtURL,
 			DownloadURL: msg.DownloadURL,
 		}
 		m.queue = append(m.queue, item)
 		m.errMsg = ""
-		artCmd := m.loadPlayerArt(item.AlbumID, item.ArtURL)
 		if m.state == StateStopped {
 			m.currentIdx = len(m.queue) - 1
 			m.state = StateLoading
-			loadCmd := m.loadCurrentTrackCmd()
-			if artCmd != nil {
-				return m, tea.Batch(loadCmd, artCmd)
-			}
-			return m, loadCmd
-		}
-		if artCmd != nil {
-			return m, artCmd
-		}
-		return m, nil
-
-	case artLoadedMsg:
-		if m.artCache != nil {
-			m.artCache.StoreEncoded(msg.Identifier, msg.Cols, msg.Rows, msg.Encoded)
-		}
-		if msg.Identifier == m.currentArtID {
-			m.currentArt = msg.Encoded
+			return m, m.loadCurrentTrackCmd()
 		}
 		return m, nil
 
@@ -173,13 +149,7 @@ func (m PlayerModel) Update(msg tea.Msg) (PlayerModel, tea.Cmd) {
 			m.state = StateLoading
 			m.elapsed = 0
 			m.total = 0
-			next := m.queue[m.currentIdx]
-			artCmd := m.loadPlayerArt(next.AlbumID, next.ArtURL)
-			loadCmd := m.loadCurrentTrackCmd()
-			if artCmd != nil {
-				return m, tea.Batch(loadCmd, artCmd)
-			}
-			return m, loadCmd
+			return m, m.loadCurrentTrackCmd()
 		}
 		m.state = StateStopped
 		m.elapsed = 0
@@ -251,13 +221,7 @@ func (m PlayerModel) handleKey(msg tea.KeyPressMsg) (PlayerModel, tea.Cmd) {
 			m.elapsed = 0
 			m.total = 0
 			m.clearStats()
-			next := m.queue[m.currentIdx]
-			artCmd := m.loadPlayerArt(next.AlbumID, next.ArtURL)
-			loadCmd := m.loadCurrentTrackCmd()
-			if artCmd != nil {
-				return m, tea.Batch(loadCmd, artCmd)
-			}
-			return m, loadCmd
+			return m, m.loadCurrentTrackCmd()
 		}
 		return m, nil
 
@@ -269,13 +233,7 @@ func (m PlayerModel) handleKey(msg tea.KeyPressMsg) (PlayerModel, tea.Cmd) {
 			m.elapsed = 0
 			m.total = 0
 			m.clearStats()
-			prev := m.queue[m.currentIdx]
-			artCmd := m.loadPlayerArt(prev.AlbumID, prev.ArtURL)
-			loadCmd := m.loadCurrentTrackCmd()
-			if artCmd != nil {
-				return m, tea.Batch(loadCmd, artCmd)
-			}
-			return m, loadCmd
+			return m, m.loadCurrentTrackCmd()
 		}
 		return m, nil
 
@@ -492,7 +450,6 @@ func (m PlayerModel) View() tea.View {
 		b.WriteString(PanelTitleStyle.Render("Now Playing"))
 		b.WriteString("\n\n")
 
-		artStr := m.getPlayerArtDisplay(current.Title)
 		trackInfo := stateStyle.Render(stateIcon) + "  " + textStyle.Bold(true).Render(current.Title) + "\n"
 		if current.AlbumTitle != "" {
 			trackInfo += "   " + mutedStyle.Render(current.AlbumTitle)
@@ -503,13 +460,7 @@ func (m PlayerModel) View() tea.View {
 		} else if current.AlbumID != "" {
 			trackInfo += "   " + mutedStyle.Render(current.AlbumID) + "\n"
 		}
-
-		if artStr != "" {
-			combined := lipgloss.JoinHorizontal(lipgloss.Top, artStr, "  ", trackInfo)
-			b.WriteString(combined)
-		} else {
-			b.WriteString("  " + trackInfo)
-		}
+		b.WriteString("  " + trackInfo)
 		b.WriteString("\n")
 
 		if m.state == StatePlaying || m.state == StatePaused {
@@ -643,31 +594,6 @@ func (m PlayerModel) View() tea.View {
 	content := b.String()
 
 	return tea.NewView(content)
-}
-
-func (m *PlayerModel) loadPlayerArt(albumID, artURL string) tea.Cmd {
-	if albumID == "" || m.artCache == nil {
-		m.currentArt = ""
-		m.currentArtID = ""
-		return nil
-	}
-	m.currentArtID = albumID
-	cols, rows := ArtColsLarge, ArtRowsLarge
-	if enc, ok := m.artCache.GetCached(albumID, cols, rows); ok {
-		m.currentArt = enc
-		return nil
-	}
-	m.currentArt = ""
-	return m.artCache.LoadArtCmd(albumID, artURL, cols, rows)
-}
-
-func (m PlayerModel) getPlayerArtDisplay(title string) string {
-	if m.currentArt != "" && m.artCache != nil && m.artCache.IsSupported() {
-		if len(m.currentArt) > 0 && m.currentArt[0] == '\x1b' {
-			return m.currentArt
-		}
-	}
-	return RenderArtPlaceholder(title, ArtColsLarge, ArtRowsLarge)
 }
 
 func formatDuration(d time.Duration) string {

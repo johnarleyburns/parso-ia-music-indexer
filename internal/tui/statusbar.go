@@ -15,10 +15,9 @@ import (
 type ResourceStats struct {
 	MemAllocMB float64
 	DBSizeMB   float64
-	ArtSizeMB  float64
 }
 
-func ComputeResourceStats(dbPath, artDir string) ResourceStats {
+func ComputeResourceStats(dbPath string) ResourceStats {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 
@@ -32,19 +31,6 @@ func ComputeResourceStats(dbPath, artDir string) ResourceStats {
 		}
 	}
 	rs.DBSizeMB = float64(dbTotal) / (1024 * 1024)
-
-	var artTotal int64
-	entries, err := os.ReadDir(artDir)
-	if err == nil {
-		for _, e := range entries {
-			if !e.IsDir() {
-				if info, err := e.Info(); err == nil {
-					artTotal += info.Size()
-				}
-			}
-		}
-	}
-	rs.ArtSizeMB = float64(artTotal) / (1024 * 1024)
 
 	return rs
 }
@@ -137,10 +123,9 @@ func RenderStatusBar(metrics *Metrics, stats *db.CombinedStats, rs ResourceStats
 		labelStyle.Render("Analyzers:") + " " + valStyle.Render(analyzerETA),
 	}
 
-	totalDisk := rs.DBSizeMB + rs.ArtSizeMB
 	line2Parts := []string{
 		labelStyle.Render("Mem:") + " " + mutedVal.Render(fmt.Sprintf("%.0f MB", rs.MemAllocMB)),
-		labelStyle.Render("Disk:") + " " + mutedVal.Render(fmt.Sprintf("DB %.1f MB  Art %.1f MB  Tot %.1f MB", rs.DBSizeMB, rs.ArtSizeMB, totalDisk)),
+		labelStyle.Render("Disk:") + " " + mutedVal.Render(fmt.Sprintf("DB %.1f MB", rs.DBSizeMB)),
 	}
 
 	albumsDone := stats.Albums.Resolved

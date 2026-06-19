@@ -55,7 +55,6 @@ type SwitchToPlayerMsg struct {
 	Title       string
 	AlbumID     string
 	AlbumTitle  string
-	ArtURL      string
 	DownloadURL string
 }
 
@@ -81,14 +80,9 @@ type BrowseModel struct {
 	similarityMode bool
 	similarSource  int
 	similarResults []db.SimilarTrack
-
-	artCache       *ArtCache
-	currentArt     string
-	currentArtID   string
-	lastCursor     int
 }
 
-func NewBrowseModel(sqlDB *sql.DB, artCache *ArtCache) BrowseModel {
+func NewBrowseModel(sqlDB *sql.DB) BrowseModel {
 	ti := textinput.New()
 	ti.Placeholder = "Search albums..."
 	ti.Prompt = "/ "
@@ -108,8 +102,6 @@ func NewBrowseModel(sqlDB *sql.DB, artCache *ArtCache) BrowseModel {
 		inputFocused: true,
 		mode:         ModeAlbums,
 		page:         0,
-		artCache:     artCache,
-		lastCursor:   -1,
 	}
 }
 
@@ -155,15 +147,6 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 		m.loaded = true
 		return m, m.doAlbumDetail(msg.AlbumID)
 
-	case artLoadedMsg:
-		if m.artCache != nil {
-			m.artCache.StoreEncoded(msg.Identifier, msg.Cols, msg.Rows, msg.Encoded)
-		}
-		if msg.Identifier == m.currentArtID {
-			m.currentArt = msg.Encoded
-		}
-		return m, nil
-
 	case browseAlbumSearchMsg:
 		if msg.Err != nil || msg.Query != m.lastQuery {
 			return m, nil
@@ -191,10 +174,6 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 		m.table.SetRows(rows)
 		m.table.GotoTop()
 		m.loaded = true
-		m.lastCursor = 0
-		if len(msg.Albums) > 0 {
-			return m, m.loadAlbumArt(msg.Albums[0].IAIdentifier, msg.Albums[0].ArtURL)
-		}
 		return m, nil
 
 	case browseAlbumDetailMsg:
@@ -224,7 +203,7 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 		m.inputFocused = false
 		m.searchInput.Blur()
 		m.table.Focus()
-		return m, m.loadAlbumArt(msg.Album.IAIdentifier, msg.Album.ArtURL)
+		return m, nil
 
 	case browseSearchMsg:
 		if msg.Err != nil || msg.Query != m.lastQuery {
@@ -388,16 +367,6 @@ func (m BrowseModel) handleTableKey(msg tea.KeyPressMsg) (BrowseModel, tea.Cmd) 
 
 	var cmd tea.Cmd
 	m.table, cmd = m.table.Update(msg)
-	if m.mode == ModeAlbums && !m.similarityMode && m.table.Cursor() != m.lastCursor {
-		m.lastCursor = m.table.Cursor()
-		if m.lastCursor >= 0 && m.lastCursor < len(m.albumResults) {
-			a := m.albumResults[m.lastCursor]
-			artCmd := m.loadAlbumArt(a.IAIdentifier, a.ArtURL)
-			if artCmd != nil {
-				return m, tea.Batch(cmd, artCmd)
-			}
-		}
-	}
 	return m, cmd
 }
 
@@ -446,17 +415,15 @@ func (m BrowseModel) handlePlay() (BrowseModel, tea.Cmd) {
 			return m, nil
 		}
 		albumTitle := ""
-		artURL := ""
 		albumID := ""
 		if m.detailAlbum != nil {
 			albumTitle = m.detailAlbum.Title
-			artURL = m.detailAlbum.ArtURL
 			albumID = m.detailAlbum.IAIdentifier
 		}
 		return m, func() tea.Msg {
 			return SwitchToPlayerMsg{
 				TrackID: t.ID, Title: t.Title, AlbumID: albumID,
-				AlbumTitle: albumTitle, ArtURL: artURL, DownloadURL: t.DownloadURL,
+				AlbumTitle: albumTitle, DownloadURL: t.DownloadURL,
 			}
 		}
 	}
@@ -553,24 +520,6 @@ func (m BrowseModel) doSimilarity(trackID int) tea.Cmd {
 	}
 }
 
-func (m *BrowseModel) loadAlbumArt(identifier, artURL string) tea.Cmd {
-	m.currentArtID = identifier
-	if m.artCache == nil {
-		m.currentArt = ""
-		return nil
-	}
-	cols, rows := ArtColsSmall, ArtRowsSmall
-	if m.mode == ModeAlbumDetail {
-		cols, rows = ArtColsLarge, ArtRowsLarge
-	}
-	if enc, ok := m.artCache.GetCached(identifier, cols, rows); ok {
-		m.currentArt = enc
-		return nil
-	}
-	m.currentArt = ""
-	return m.artCache.LoadArtCmd(identifier, artURL, cols, rows)
-}
-
 func (m BrowseModel) Activate() (BrowseModel, tea.Cmd) {
 	if !m.loaded {
 		m.lastQuery = ""
@@ -637,22 +586,23 @@ func (m BrowseModel) View() tea.View {
 		idx := m.table.Cursor()
 		if idx < len(m.albumResults) {
 			a := m.albumResults[idx]
-			artStr := m.getArtDisplay(a.Title, ArtColsSmall, ArtRowsSmall)
 			infoStyle := lipgloss.NewStyle().Foreground(TextColor)
-			info := infoStyle.Bold(true).Render(a.Title) + "\n"
-			info += mutedStyle.Render(a.Creator)
-			if a.Collection != "" {
-				info += mutedStyle.Render(" \u00b7 " + a.Collection)
+			var parts []string
+			if a.Creator != "" {
+				parts = append(parts, a.Creator)
 			}
-			info += mutedStyle.Render(fmt.Sprintf(" \u00b7 %d/%d tracks", a.CompletedCount, a.TrackCount))
+			if a.Collection != "" {
+				parts = append(parts, a.Collection)
+			}
+			parts = append(parts, fmt.Sprintf("%d/%d tracks", a.CompletedCount, a.TrackCount))
 			if a.Downloads > 0 {
-				info += mutedStyle.Render(fmt.Sprintf(" \u00b7 %s downloads", formatDownloads(a.Downloads)))
+				parts = append(parts, fmt.Sprintf("%s downloads", formatDownloads(a.Downloads)))
 			}
 			if a.AvgQuality > 0 {
-				info += mutedStyle.Render(fmt.Sprintf(" \u00b7 avg quality %.3f", a.AvgQuality))
+				parts = append(parts, fmt.Sprintf("avg quality %.3f", a.AvgQuality))
 			}
-			preview := lipgloss.JoinHorizontal(lipgloss.Top, artStr, "  ", info)
-			b.WriteString(preview)
+			desc := infoStyle.Bold(true).Render(a.Title) + "\n" + mutedStyle.Render(strings.Join(parts, " \u00b7 "))
+			b.WriteString(fixedHeightText(desc, m.Width-4, 3))
 			b.WriteString("\n\n")
 		}
 	}
@@ -678,43 +628,28 @@ func (m BrowseModel) renderAlbumDetailHeader(b *strings.Builder, titleStyle, mut
 	b.WriteString(mutedStyle.Render("\u2190 Back [esc]"))
 	b.WriteString("\n\n")
 
-	artStr := m.getArtDisplay(a.Title, ArtColsLarge, ArtRowsLarge)
-	infoLines := titleStyle.Render(a.Title) + "\n"
-	info := a.Creator
+	b.WriteString(titleStyle.Render(a.Title))
+	b.WriteString("\n")
+	var parts []string
+	if a.Creator != "" {
+		parts = append(parts, a.Creator)
+	}
 	if a.Collection != "" {
-		if info != "" {
-			info += " \u00b7 "
-		}
-		info += a.Collection
+		parts = append(parts, a.Collection)
 	}
-	info += fmt.Sprintf(" \u00b7 %d tracks", a.TrackCount)
+	trackInfo := fmt.Sprintf("%d tracks", a.TrackCount)
 	if a.CompletedCount > 0 {
-		info += fmt.Sprintf(" (%d completed)", a.CompletedCount)
+		trackInfo += fmt.Sprintf(" (%d completed)", a.CompletedCount)
 	}
+	parts = append(parts, trackInfo)
 	if a.Downloads > 0 {
-		info += fmt.Sprintf(" \u00b7 %s downloads", formatDownloads(a.Downloads))
+		parts = append(parts, fmt.Sprintf("%s downloads", formatDownloads(a.Downloads)))
 	}
 	if a.AvgQuality > 0 {
-		info += fmt.Sprintf(" \u00b7 avg quality %.3f", a.AvgQuality)
+		parts = append(parts, fmt.Sprintf("avg quality %.3f", a.AvgQuality))
 	}
-	infoLines += mutedStyle.Render(info)
-
-	if artStr != "" {
-		combined := lipgloss.JoinHorizontal(lipgloss.Top, artStr, "  ", infoLines)
-		b.WriteString(combined)
-	} else {
-		b.WriteString(infoLines)
-	}
+	b.WriteString(mutedStyle.Render(strings.Join(parts, " \u00b7 ")))
 	b.WriteString("\n")
-}
-
-func (m BrowseModel) getArtDisplay(title string, cols, rows int) string {
-	if m.currentArt != "" && m.artCache != nil && m.artCache.IsSupported() {
-		if len(m.currentArt) > 0 && m.currentArt[0] == '\x1b' {
-			return m.currentArt
-		}
-	}
-	return RenderArtPlaceholder(title, cols, rows)
 }
 
 func (m BrowseModel) emptyMessage(style lipgloss.Style) string {
@@ -771,6 +706,25 @@ func formatDownloads(n int) string {
 		return fmt.Sprintf("%.1fK", float64(n)/1_000)
 	}
 	return fmt.Sprintf("%d", n)
+}
+
+func fixedHeightText(text string, width, maxLines int) string {
+	if width <= 0 {
+		width = 80
+	}
+	wrapped := lipgloss.NewStyle().Width(width).Render(text)
+	lines := strings.Split(wrapped, "\n")
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+		last := lines[maxLines-1]
+		if len(last) > 3 {
+			lines[maxLines-1] = last[:len(last)-3] + "..."
+		}
+	}
+	for len(lines) < maxLines {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func albumDetailColumns() []table.Column {

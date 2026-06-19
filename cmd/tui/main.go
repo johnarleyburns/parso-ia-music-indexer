@@ -406,8 +406,6 @@ func discoverCollection(cfg *config.Config, sqlDB *db.DB, client *http.Client, l
 
 func albumResolverLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
 	dbMu *sync.Mutex, iaClient *http.Client, metaLimiter *ratelimit.Limiter, resolverID string, metrics *tui.Metrics) {
-	batchSize := 10
-
 	for {
 		select {
 		case <-stopCh:
@@ -416,47 +414,26 @@ func albumResolverLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-c
 		}
 
 		dbMu.Lock()
-		albumIDs, err := db.ClaimUnresolvedAlbumBatch(sqlDB.Conn, resolverID, batchSize)
+		albumID, err := db.ClaimUnresolvedAlbum(sqlDB.Conn, resolverID)
 		dbMu.Unlock()
 		if err != nil {
 			events <- tui.ActivityEvent{
 				Type:      tui.EventInfo,
 				Timestamp: time.Now(),
 				WorkerID:  resolverID,
-				Message:   fmt.Sprintf("[%s] Claim album batch error: %v", resolverID, err),
+				Message:   fmt.Sprintf("[%s] Claim album error: %v", resolverID, err),
 				Error:     err.Error(),
 			}
 			sleepOrStop(5*time.Second, stopCh)
 			continue
 		}
 
-		if len(albumIDs) == 0 {
+		if albumID == "" {
 			sleepOrStop(3*time.Second, stopCh)
 			continue
 		}
 
-		events <- tui.ActivityEvent{
-			Type:      tui.EventInfo,
-			Timestamp: time.Now(),
-			WorkerID:  resolverID,
-			Message:   fmt.Sprintf("[%s] Resolving batch of %d albums", resolverID, len(albumIDs)),
-		}
-
-		var wg sync.WaitGroup
-		for _, albumID := range albumIDs {
-			select {
-			case <-stopCh:
-				wg.Wait()
-				return
-			default:
-			}
-			wg.Add(1)
-			go func(id string) {
-				defer wg.Done()
-				resolveAlbum(sqlDB, events, dbMu, iaClient, metaLimiter, resolverID, id, metrics)
-			}(albumID)
-		}
-		wg.Wait()
+		resolveAlbum(sqlDB, events, dbMu, iaClient, metaLimiter, resolverID, albumID, metrics)
 	}
 }
 
@@ -881,15 +858,13 @@ func runTUI(cfg *config.Config) {
 	}
 	defer clapClient.Close()
 
-	artDir := filepath.Join(filepath.Dir(cfg.DBPath), "art")
-	artCache := tui.NewArtCache(artDir)
 	metrics := tui.NewMetrics()
 
 	events := tui.NewEventChannel()
 	controls := tui.NewControlChannel()
 	go runCoordinator(cfg, sqlDB, events, controls, metrics, clapClient)
 
-	m := tui.NewMainModel(cfg, sqlDB.Conn, events, controls, artCache, metrics, cfg.DBPath, artDir)
+	m := tui.NewMainModel(cfg, sqlDB.Conn, events, controls, metrics, cfg.DBPath)
 	p := tea.NewProgram(m)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

@@ -66,10 +66,8 @@ type MainModel struct {
 	Events   chan ActivityEvent
 	Controls chan ControlCmd
 
-	ArtCache *ArtCache
 	Metrics  *Metrics
 	DBPath   string
-	ArtDir   string
 	Resources ResourceStats
 
 	Dashboard DashboardModel
@@ -85,7 +83,7 @@ type MainModel struct {
 	Ready  bool
 }
 
-func NewMainModel(cfg *config.Config, sqlDB *sql.DB, events chan ActivityEvent, controls chan ControlCmd, artCache *ArtCache, metrics *Metrics, dbPath, artDir string) MainModel {
+func NewMainModel(cfg *config.Config, sqlDB *sql.DB, events chan ActivityEvent, controls chan ControlCmd, metrics *Metrics, dbPath string) MainModel {
 	return MainModel{
 		Config:    cfg,
 		Tabs:      []string{"Dashboard", "Live Log", "Browse", "Player"},
@@ -93,14 +91,12 @@ func NewMainModel(cfg *config.Config, sqlDB *sql.DB, events chan ActivityEvent, 
 		DB:        sqlDB,
 		Events:    events,
 		Controls:  controls,
-		ArtCache:  artCache,
 		Metrics:   metrics,
 		DBPath:    dbPath,
-		ArtDir:    artDir,
 		Dashboard: NewDashboardModel(sqlDB),
 		LiveLog:   NewLiveLogModel(),
-		Browse:    NewBrowseModel(sqlDB, artCache),
-		Player:    NewPlayerModel(sqlDB, artCache),
+		Browse:    NewBrowseModel(sqlDB),
+		Player:    NewPlayerModel(sqlDB),
 		Help:      help.New(),
 		Keys:      keys,
 	}
@@ -256,12 +252,6 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Browse, cmd = m.Browse.Update(msg)
 		return m, cmd
 
-	case artLoadedMsg:
-		var cmd1, cmd2 tea.Cmd
-		m.Browse, cmd1 = m.Browse.Update(msg)
-		m.Player, cmd2 = m.Player.Update(msg)
-		return m, tea.Batch(cmd1, cmd2)
-
 	case playerLoadedMsg, playerErrorMsg, playerTickMsg, playerDoneMsg, playerStatsMsg:
 		var cmd tea.Cmd
 		m.Player, cmd = m.Player.Update(msg)
@@ -340,9 +330,8 @@ func (m MainModel) View() tea.View {
 
 func (m MainModel) resourceTick() tea.Cmd {
 	dbPath := m.DBPath
-	artDir := m.ArtDir
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
-		return resourceTickMsg{Stats: ComputeResourceStats(dbPath, artDir)}
+		return resourceTickMsg{Stats: ComputeResourceStats(dbPath)}
 	})
 }
 
