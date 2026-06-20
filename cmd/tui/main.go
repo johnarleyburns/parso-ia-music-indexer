@@ -22,6 +22,7 @@ import (
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/ia"
 	ratelimit "github.com/johnarleyburns/parso-ia-music-indexer/internal/rate"
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/tui"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -61,6 +62,8 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 	iaClient := ia.NewClient(60 * time.Second)
 	iaClient.Transport = tui.NewInstrumentedTransport(metrics)
 	metaLimiter := ratelimit.NewBurstLimiter(cfg.IAApiRate, 5)
+	downloadLimiter := ratelimit.NewBurstLimiter(cfg.IAApiRate, 2)
+	bwLimiter := rate.NewLimiter(rate.Limit(cfg.ThrottleBPS), cfg.ThrottleBPS)
 
 	stuckTicker := time.NewTicker(5 * time.Minute)
 	defer stuckTicker.Stop()
@@ -147,7 +150,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 					WorkerID:   wID,
 					Message:    fmt.Sprintf("Analyzer %s started (pool: %d)", wID, workerCount),
 				}
-				go workerLoop(cfg, sqlDB, events, stopCh, dbMu, clapClient, iaClient, wID, metrics)
+				go workerLoop(cfg, sqlDB, events, stopCh, dbMu, clapClient, iaClient, wID, metrics, downloadLimiter, bwLimiter)
 			case tui.CmdRemoveWorker:
 				if workerCount > 0 {
 					workerCount--
@@ -453,7 +456,8 @@ func main() {
 }
 
 func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
-	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, metrics *tui.Metrics) {
+	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, metrics *tui.Metrics,
+	downloadLimiter *ratelimit.Limiter, bwLimiter *rate.Limiter) {
 	batchSize := 2
 	consecutiveFailures := 0
 	const maxConsecutiveFailures = 5
@@ -512,7 +516,7 @@ func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEven
 					return
 				default:
 				}
-				ok := analyzeTrack(cfg, sqlDB, events, dbMu, clapClient, iaClient, workerID, track, metrics)
+				ok := analyzeTrack(cfg, sqlDB, events, dbMu, clapClient, iaClient, workerID, track, metrics, downloadLimiter, bwLimiter)
 				if ok {
 					consecutiveFailures = 0
 				} else {
@@ -528,7 +532,8 @@ func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEven
 }
 
 func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent,
-	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, track db.ClaimedTrack, metrics *tui.Metrics) bool {
+	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, track db.ClaimedTrack, metrics *tui.Metrics,
+	downloadLimiter *ratelimit.Limiter, bwLimiter *rate.Limiter) bool {
 
 	trackLabel := track.Title
 	if trackLabel == "" {
@@ -544,7 +549,23 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	mp3Data, err := audio.StreamAudioFromURL(ctx, iaClient, track.DownloadURL, cfg.MaxBytes)
+	if err := downloadLimiter.Wait(ctx); err != nil {
+		cancel()
+		errMsg := fmt.Sprintf("rate limit: %v", err)
+		dbMu.Lock()
+		db.MarkTrackFailed(sqlDB.Conn, track.ID, errMsg)
+		dbMu.Unlock()
+		events <- tui.ActivityEvent{
+			Type:       tui.EventAnalysisFailed,
+			Timestamp:  time.Now(),
+			Identifier: trackLabel,
+			WorkerID:   workerID,
+			Message:    fmt.Sprintf("[%s] Rate limit wait failed %s: %v", workerID, trackLabel, err),
+			Error:      err.Error(),
+		}
+		return false
+	}
+	mp3Data, err := audio.StreamAudioFromURL(ctx, iaClient, track.DownloadURL, cfg.MaxBytes, bwLimiter)
 	cancel()
 	if err != nil {
 		errMsg := fmt.Sprintf("stream: %v", err)
