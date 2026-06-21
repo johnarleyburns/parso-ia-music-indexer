@@ -350,6 +350,44 @@ func FlagAlbumPoorQuality(sqlDB *sql.DB, trackID int, albumID string, reason str
 	return skipped, tx.Commit()
 }
 
+func FailAlbumAndPendingTracks(sqlDB *sql.DB, trackID int, albumID string, reason string) (int64, error) {
+	tx, err := sqlDB.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	_, err = tx.Exec(
+		`UPDATE tracks SET status='failed', error_message=?, updated_at=? WHERE id=?`,
+		reason, now, trackID,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	result, err := tx.Exec(
+		`UPDATE tracks SET status='failed', error_message=?, updated_at=?
+		 WHERE album_id=? AND status='pending'`,
+		reason, now, albumID,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	_, err = tx.Exec(
+		`UPDATE albums SET status='failed', error_message=?, updated_at=? WHERE ia_identifier=?`,
+		reason, now, albumID,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	skipped, _ := result.RowsAffected()
+	return skipped, tx.Commit()
+}
+
 func InsertTracks(db *sql.DB, albumID string, tracks []TrackInsert) (int, error) {
 	tx, err := db.Begin()
 	if err != nil {

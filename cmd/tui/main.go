@@ -568,15 +568,29 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	if err != nil {
 		errMsg := fmt.Sprintf("stream: %v", err)
 		dbMu.Lock()
-		db.MarkTrackFailed(sqlDB.Conn, track.ID, errMsg)
-		dbMu.Unlock()
-		events <- tui.ActivityEvent{
-			Type:       tui.EventAnalysisFailed,
-			Timestamp:  time.Now(),
-			Identifier: trackLabel,
-			WorkerID:   workerID,
-			Message:    fmt.Sprintf("[%s] Failed %s: %v", workerID, trackLabel, err),
-			Error:      err.Error(),
+		if strings.Contains(err.Error(), "unexpected status 401") || strings.Contains(err.Error(), "unexpected status 403") {
+			reason := fmt.Sprintf("access-restricted: %v", err)
+			skipped, _ := db.FailAlbumAndPendingTracks(sqlDB.Conn, track.ID, track.AlbumID, reason)
+			dbMu.Unlock()
+			events <- tui.ActivityEvent{
+				Type:       tui.EventAnalysisFailed,
+				Timestamp:  time.Now(),
+				Identifier: track.AlbumID,
+				WorkerID:   workerID,
+				Message:    fmt.Sprintf("[%s] Album access-restricted %s: %v (%d pending tracks failed)", workerID, track.AlbumID, err, skipped),
+				Error:      err.Error(),
+			}
+		} else {
+			db.MarkTrackFailed(sqlDB.Conn, track.ID, errMsg)
+			dbMu.Unlock()
+			events <- tui.ActivityEvent{
+				Type:       tui.EventAnalysisFailed,
+				Timestamp:  time.Now(),
+				Identifier: trackLabel,
+				WorkerID:   workerID,
+				Message:    fmt.Sprintf("[%s] Failed %s: %v", workerID, trackLabel, err),
+				Error:      err.Error(),
+			}
 		}
 		return false
 	}
