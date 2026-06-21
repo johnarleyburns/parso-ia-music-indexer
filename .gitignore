@@ -7,3 +7,4 @@ data/*.log
 data/art/
 python_sidecar/.venv/
 __pycache__/
+.venv-312/

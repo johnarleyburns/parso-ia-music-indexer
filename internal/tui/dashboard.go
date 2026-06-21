@@ -321,15 +321,19 @@ func (m DashboardModel) buildRightPanel(titleStyle, panelBorder lipgloss.Style, 
 	analyzerSection := m.buildPoolSection(sectionTitle, "Analyzer Pool", m.AnalyzerCount, m.AnalyzerStates, "[w] add  [W] remove")
 	cleanerSection := m.buildPoolSection(sectionTitle, "Cleaner Pool", m.CleanerCount, m.CleanerStates, "[c] add  [C] remove")
 
-	controlsHeight := lipgloss.Height(coordSection) + lipgloss.Height(resolverSection) + lipgloss.Height(analyzerSection) + lipgloss.Height(cleanerSection) + 5
-	availHeight := m.Height - 7
-	feedHeight := availHeight - controlsHeight
-	if feedHeight < 4 {
-		feedHeight = 4
+	const panelOverhead = 4 // 2 border + 2 padding
+
+	controlsContentHeight := lipgloss.Height(coordSection) + lipgloss.Height(resolverSection) + lipgloss.Height(analyzerSection) + lipgloss.Height(cleanerSection) + 3
+
+	availBodyHeight := m.Height - 9 // tab(1) + status(4) + help(1) + title+gaps(3)
+
+	feedContentHeight := availBodyHeight - controlsContentHeight - panelOverhead - panelOverhead
+	if feedContentHeight < 3 {
+		feedContentHeight = 3
 	}
 
 	feedContent := sectionTitle("Activity Feed") + "\n"
-	feedContent += RenderActivityFeed(m.Events, width-4, feedHeight-1)
+	feedContent += RenderActivityFeed(m.Events, width-4, feedContentHeight-1)
 
 	controlsPanel := panelBorder.Width(width).Render(
 		coordSection + "\n" + resolverSection + "\n" + analyzerSection + "\n" + cleanerSection,

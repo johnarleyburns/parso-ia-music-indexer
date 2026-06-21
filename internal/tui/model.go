@@ -312,7 +312,7 @@ func (m MainModel) View() tea.View {
 		return tea.NewView("initializing...")
 	}
 
-	tabBar := components.NewTabBar(m.Tabs, m.ActiveTab)
+	tabBar := components.NewTabBar(m.Tabs, m.ActiveTab, m.Width)
 
 	var content string
 	switch m.ActiveTab {

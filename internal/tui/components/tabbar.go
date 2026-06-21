@@ -7,6 +7,7 @@ import (
 type TabBar struct {
 	Tabs      []string
 	ActiveTab int
+	Width     int
 	styles    TabBarStyles
 }
 
@@ -32,10 +33,11 @@ func DefaultTabBarStyles() TabBarStyles {
 	}
 }
 
-func NewTabBar(tabs []string, active int) TabBar {
+func NewTabBar(tabs []string, active int, width int) TabBar {
 	return TabBar{
 		Tabs:      tabs,
 		ActiveTab: active,
+		Width:     width,
 		styles:    DefaultTabBarStyles(),
 	}
 }
@@ -56,5 +58,5 @@ func (t *TabBar) View() string {
 		}
 	}
 	row := lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
-	return t.styles.Bar.Width(80).Render(row)
+	return t.styles.Bar.MaxWidth(t.Width).Render(row)
 }
