@@ -182,7 +182,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 			WorkerID:   cID,
 			Message:    fmt.Sprintf("Cleaner %s started (pool: %d)", cID, cleanerCount),
 		}
-		go cleanupWorkerLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, cID)
+		go cleanupWorkerLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, cID, metrics)
 	case tui.CmdRemoveCleaner:
 		if cleanerCount > 0 {
 			cleanerCount--
@@ -475,7 +475,7 @@ func albumResolverLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-c
 }
 
 func cleanupWorkerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
-	dbMu *sync.Mutex, iaClient *http.Client, iaLimiter *ratelimit.Limiter, workerID string) {
+	dbMu *sync.Mutex, iaClient *http.Client, iaLimiter *ratelimit.Limiter, workerID string, metrics *tui.Metrics) {
 	for {
 		select {
 		case <-stopCh:
@@ -577,6 +577,7 @@ func cleanupWorkerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-c
 			}
 		}
 
+		metrics.RecordCleanerCompletion()
 		sleepOrStop(1*time.Second, stopCh)
 	}
 }
@@ -679,7 +680,7 @@ func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEven
 					return
 				default:
 				}
-				ok := analyzeTrack(cfg, sqlDB, events, dbMu, clapClient, iaClient, workerID, track, metrics, iaLimiter, bwLimiter)
+				ok := analyzeTrack(cfg, sqlDB, events, dbMu, clapClient, iaClient, workerID, track, metrics, iaLimiter, bwLimiter, stopCh)
 				if ok {
 					consecutiveFailures = 0
 				} else {
@@ -696,7 +697,7 @@ func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEven
 
 func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent,
 	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, track db.ClaimedTrack, metrics *tui.Metrics,
-	iaLimiter *ratelimit.Limiter, bwLimiter *rate.Limiter) bool {
+	iaLimiter *ratelimit.Limiter, bwLimiter *rate.Limiter, stopCh <-chan struct{}) bool {
 
 	trackLabel := track.Title
 	if trackLabel == "" {
@@ -714,19 +715,19 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	if err := iaLimiter.Wait(ctx); err != nil {
 		cancel()
-		errMsg := fmt.Sprintf("rate limit: %v", err)
+		now := time.Now().UTC().Format(time.RFC3339)
 		dbMu.Lock()
-		db.MarkTrackFailed(sqlDB.Conn, track.ID, errMsg)
+		sqlDB.Conn.Exec(`UPDATE tracks SET status='pending', updated_at=? WHERE id=?`, now, track.ID)
 		dbMu.Unlock()
 		events <- tui.ActivityEvent{
-			Type:       tui.EventAnalysisFailed,
+			Type:       tui.EventInfo,
 			Timestamp:  time.Now(),
 			Identifier: trackLabel,
 			WorkerID:   workerID,
-			Message:    fmt.Sprintf("[%s] Rate limit wait failed %s: %v", workerID, trackLabel, err),
-			Error:      err.Error(),
+			Message:    fmt.Sprintf("[%s] Rate limit wait for %s, will retry", workerID, trackLabel),
 		}
-		return false
+		sleepOrStop(30*time.Second, stopCh)
+		return true
 	}
 	mp3Data, err := audio.StreamAudioFromURL(ctx, iaClient, track.DownloadURL, cfg.MaxBytes, bwLimiter)
 	cancel()

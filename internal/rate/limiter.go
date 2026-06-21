@@ -12,7 +12,11 @@ type Limiter struct {
 }
 
 func NewLimiter(reqPerMin int) *Limiter {
-	return NewBurstLimiter(reqPerMin, 1)
+	burst := reqPerMin / 4
+	if burst < 4 {
+		burst = 4
+	}
+	return NewBurstLimiter(reqPerMin, burst)
 }
 
 func NewBurstLimiter(reqPerMin int, burst int) *Limiter {
