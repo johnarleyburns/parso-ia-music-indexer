@@ -152,6 +152,19 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		browseInputActive := m.ActiveTab == 2 && m.Browse.InputFocused()
 
+		if (m.ActiveTab == 0 || m.ActiveTab == 1) && !browseInputActive {
+			switch msg.String() {
+			case "left":
+				prevTab := m.ActiveTab
+				m.ActiveTab = (m.ActiveTab - 1 + len(m.Tabs)) % len(m.Tabs)
+				return m, m.onTabSwitch(prevTab, m.ActiveTab)
+			case "right":
+				prevTab := m.ActiveTab
+				m.ActiveTab = (m.ActiveTab + 1) % len(m.Tabs)
+				return m, m.onTabSwitch(prevTab, m.ActiveTab)
+			}
+		}
+
 		if key.Matches(msg, m.Keys.Quit) && msg.String() == "ctrl+c" {
 			m.Player.engine.Close()
 			m.Controls <- ControlCmd{Action: CmdShutdown}
@@ -303,11 +316,13 @@ func (m MainModel) View() tea.View {
 		contentHeight = 1
 	}
 
-	contentLines := strings.Split(content, "\n")
-	if len(contentLines) > contentHeight {
-		contentLines = contentLines[:contentHeight]
+	if m.ActiveTab != 2 {
+		contentLines := strings.Split(content, "\n")
+		if len(contentLines) > contentHeight {
+			contentLines = contentLines[:contentHeight]
+		}
+		content = strings.Join(contentLines, "\n")
 	}
-	content = strings.Join(contentLines, "\n")
 
 	panelStyle := lipgloss.NewStyle().
 		Width(m.Width).

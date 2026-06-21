@@ -596,13 +596,18 @@ func SearchCompletedTracks(sqlDB *sql.DB, query string, limit, offset int) ([]Tr
 	return results, totalCount, nil
 }
 
-func SearchAlbums(sqlDB *sql.DB, query string, limit, offset int) ([]AlbumResult, int, error) {
+func SearchAlbums(sqlDB *sql.DB, query string, limit, offset int, completedOnly bool) ([]AlbumResult, int, error) {
 	var totalCount int
 	var rows *sql.Rows
 	var err error
 
+	completedFilter := ""
+	if completedOnly {
+		completedFilter = ` AND a.track_count > 0 AND a.track_count = (SELECT count(*) FROM tracks t WHERE t.album_id = a.ia_identifier AND t.status = 'completed')`
+	}
+
 	if query == "" {
-		err = sqlDB.QueryRow(`SELECT count(*) FROM albums WHERE status = 'resolved'`).Scan(&totalCount)
+		err = sqlDB.QueryRow(`SELECT count(*) FROM albums a WHERE status = 'resolved'` + completedFilter).Scan(&totalCount)
 		if err != nil {
 			return nil, 0, fmt.Errorf("count: %w", err)
 		}
@@ -612,14 +617,14 @@ func SearchAlbums(sqlDB *sql.DB, query string, limit, offset int) ([]AlbumResult
 				COALESCE(a.downloads, 0),
 				COALESCE((SELECT AVG(e.quality_score) FROM tracks t INNER JOIN track_embeddings e ON t.id = e.track_id WHERE t.album_id = a.ia_identifier AND t.status = 'completed'), 0.0)
 			FROM albums a
-			WHERE a.status = 'resolved'
+			WHERE a.status = 'resolved'`+completedFilter+`
 			ORDER BY a.downloads DESC, a.updated_at DESC
 			LIMIT ? OFFSET ?`, limit, offset)
 	} else {
 		pattern := "%" + query + "%"
-		err = sqlDB.QueryRow(`SELECT count(*) FROM albums
+		err = sqlDB.QueryRow(`SELECT count(*) FROM albums a
 			WHERE status = 'resolved'
-			  AND (ia_identifier LIKE ? OR title LIKE ? OR creator LIKE ? OR collection LIKE ?)`,
+			  AND (ia_identifier LIKE ? OR title LIKE ? OR creator LIKE ? OR collection LIKE ?)`+completedFilter,
 			pattern, pattern, pattern, pattern).Scan(&totalCount)
 		if err != nil {
 			return nil, 0, fmt.Errorf("count: %w", err)
@@ -631,7 +636,7 @@ func SearchAlbums(sqlDB *sql.DB, query string, limit, offset int) ([]AlbumResult
 				COALESCE((SELECT AVG(e.quality_score) FROM tracks t INNER JOIN track_embeddings e ON t.id = e.track_id WHERE t.album_id = a.ia_identifier AND t.status = 'completed'), 0.0)
 			FROM albums a
 			WHERE a.status = 'resolved'
-			  AND (a.ia_identifier LIKE ? OR a.title LIKE ? OR a.creator LIKE ? OR a.collection LIKE ?)
+			  AND (a.ia_identifier LIKE ? OR a.title LIKE ? OR a.creator LIKE ? OR a.collection LIKE ?)`+completedFilter+`
 			ORDER BY a.downloads DESC, a.updated_at DESC
 			LIMIT ? OFFSET ?`, pattern, pattern, pattern, pattern, limit, offset)
 	}

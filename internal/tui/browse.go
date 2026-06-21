@@ -77,9 +77,10 @@ type BrowseModel struct {
 	detailAlbum  *db.AlbumResult
 	detailTracks []db.TrackDetail
 
-	similarityMode bool
-	similarSource  int
-	similarResults []db.SimilarTrack
+	similarityMode    bool
+	similarSource     int
+	similarResults    []db.SimilarTrack
+	showCompletedOnly bool
 }
 
 func NewBrowseModel(sqlDB *sql.DB) BrowseModel {
@@ -325,6 +326,14 @@ func (m BrowseModel) handleTableKey(msg tea.KeyPressMsg) (BrowseModel, tea.Cmd) 
 	case "m", "ctrl+t":
 		return m.toggleMode()
 
+	case "c":
+		if m.mode == ModeAlbums && !m.similarityMode {
+			m.showCompletedOnly = !m.showCompletedOnly
+			m.lastQuery = m.searchInput.Value()
+			return m, m.doAlbumSearch(m.searchInput.Value())
+		}
+		return m, nil
+
 	case "enter", "right":
 		return m.handleEnter()
 
@@ -482,8 +491,9 @@ func (m BrowseModel) doModeSearch(query string) tea.Cmd {
 func (m BrowseModel) doAlbumSearch(query string) tea.Cmd {
 	sqlDB := m.DB
 	pg := m.page
+	completedOnly := m.showCompletedOnly
 	return func() tea.Msg {
-		albums, total, err := db.SearchAlbums(sqlDB, query, browsePageSize, pg*browsePageSize)
+		albums, total, err := db.SearchAlbums(sqlDB, query, browsePageSize, pg*browsePageSize, completedOnly)
 		return browseAlbumSearchMsg{Albums: albums, TotalCount: total, Query: query, Err: err}
 	}
 }
@@ -558,6 +568,10 @@ func (m BrowseModel) View() tea.View {
 		b.WriteString("  ")
 		b.WriteString(modeIndicator)
 		b.WriteString(modeAlt)
+		if m.showCompletedOnly {
+			filterBadge := lipgloss.NewStyle().Foreground(Primary).Render(" [c=fully analyzed]")
+			b.WriteString(filterBadge)
+		}
 		b.WriteString("  ")
 		b.WriteString(mutedStyle.Render(fmt.Sprintf("%d albums", m.totalCount)))
 	case m.mode == ModeTracks:
@@ -678,7 +692,7 @@ func (m BrowseModel) buildHints(style lipgloss.Style) string {
 	}
 	switch m.mode {
 	case ModeAlbums:
-		return style.Render("  [\u2192/enter] view album  [m/ctrl+t] tracks  [/] search  [\u2191\u2193] navigate")
+		return style.Render("  [\u2192/enter] view album  [m/ctrl+t] tracks  [c] fully analyzed  [/] search  [\u2191\u2193] navigate")
 	case ModeAlbumDetail:
 		return style.Render("  [\u2192/enter/p] play  [v] similar  [\u2190/esc] back  [\u2191\u2193] navigate")
 	case ModeTracks:

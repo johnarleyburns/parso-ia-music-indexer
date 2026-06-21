@@ -29,10 +29,11 @@ type IAFullMetadataResponse struct {
 }
 
 type IAItemMetadata struct {
-	Identifier string          `json:"identifier"`
-	Title      string          `json:"title"`
-	Creator    json.RawMessage `json:"creator"`
-	Collection json.RawMessage `json:"collection"`
+	Identifier           string          `json:"identifier"`
+	Title                string          `json:"title"`
+	Creator              json.RawMessage `json:"creator"`
+	Collection           json.RawMessage `json:"collection"`
+	AccessRestrictedItem bool            `json:"access-restricted-item"`
 }
 
 func (m *IAItemMetadata) CreatorString() string {

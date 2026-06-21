@@ -49,6 +49,10 @@ func LookupAlbumMetadata(ctx context.Context, client *http.Client, identifier st
 		ArtURL:     fmt.Sprintf("https://archive.org/services/img/%s", identifier),
 	}
 
+	if full.Metadata.AccessRestrictedItem {
+		return album, nil
+	}
+
 	for _, f := range full.Files {
 		if !IsAcceptableMP3(f.Format, f.Bitrate) {
 			continue

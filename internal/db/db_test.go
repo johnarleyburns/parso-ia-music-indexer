@@ -515,7 +515,7 @@ func TestSearchAlbums(t *testing.T) {
 	MarkAlbumResolved(db.Conn, "etree:gd-1977", "Grateful Dead 1977", "Grateful Dead", "etree", "", 12)
 	MarkAlbumResolved(db.Conn, "georgeblood:victor", "Victor Herbert", "Victor Herbert", "georgeblood", "", 4)
 
-	albums, total, err := SearchAlbums(db.Conn, "", 50, 0)
+	albums, total, err := SearchAlbums(db.Conn, "", 50, 0, false)
 	if err != nil {
 		t.Fatalf("SearchAlbums: %v", err)
 	}
@@ -523,7 +523,7 @@ func TestSearchAlbums(t *testing.T) {
 		t.Errorf("expected 2 albums, got total=%d len=%d", total, len(albums))
 	}
 
-	albums, total, err = SearchAlbums(db.Conn, "Grateful", 50, 0)
+	albums, total, err = SearchAlbums(db.Conn, "Grateful", 50, 0, false)
 	if err != nil {
 		t.Fatalf("filtered: %v", err)
 	}
