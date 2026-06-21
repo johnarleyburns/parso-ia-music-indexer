@@ -106,7 +106,9 @@ class CLAPTextEncoder(torch.nn.Module):
 
         # Build extended attention mask: [batch, 1, 1, seq_len]
         mask = attention_mask.unsqueeze(1).unsqueeze(2).to(dtype=x.dtype)
-        mask = (1.0 - mask) * torch.finfo(x.dtype).min
+        # Use a finite large negative value (not finfo.min) to avoid
+        # coremltools converting it to -inf, which produces NaN from 0 * -inf.
+        mask = (1.0 - mask) * torch.tensor(-10000.0, dtype=x.dtype)
 
         enc_out = self.encoder(x, attention_mask=mask)
         pooled = self.pooler(enc_out.last_hidden_state)
