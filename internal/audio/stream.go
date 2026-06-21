@@ -15,7 +15,6 @@ func StreamAudioFromURL(ctx context.Context, client *http.Client, mp3URL string,
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", maxBytes-1))
 	req.Header.Set("User-Agent", "ParsoIAIndexer/1.0")
 
 	resp, err := client.Do(req)
