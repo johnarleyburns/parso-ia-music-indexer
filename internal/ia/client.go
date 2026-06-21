@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -39,9 +41,16 @@ func DoWithRetry(ctx context.Context, client *http.Client, req *http.Request) (*
 
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
 			resp.Body.Close()
+			wait := backoffs[attempt]
+			if ra := resp.Header.Get("Retry-After"); ra != "" {
+				if d := parseRetryAfter(ra); d > 0 {
+					wait = d
+				}
+			}
+			lastErr = fmt.Errorf("IA API error: HTTP %d", resp.StatusCode)
 			if attempt < len(backoffs) {
 				select {
-				case <-time.After(backoffs[attempt]):
+				case <-time.After(wait):
 				case <-ctx.Done():
 					return nil, ctx.Err()
 				}
@@ -59,4 +68,21 @@ func DoWithRetry(ctx context.Context, client *http.Client, req *http.Request) (*
 	}
 
 	return nil, fmt.Errorf("exhausted retries: %w", lastErr)
+}
+
+func parseRetryAfter(s string) time.Duration {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(s); err == nil {
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := time.Parse(time.RFC1123, s); err == nil {
+		return time.Until(t)
+	}
+	if t, err := time.Parse(time.RFC1123Z, s); err == nil {
+		return time.Until(t)
+	}
+	return 0
 }

@@ -61,8 +61,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 	dbMu := &sync.Mutex{}
 	iaClient := ia.NewClient(60 * time.Second)
 	iaClient.Transport = tui.NewInstrumentedTransport(metrics)
-	metaLimiter := ratelimit.NewBurstLimiter(cfg.IAApiRate, 5)
-	downloadLimiter := ratelimit.NewBurstLimiter(cfg.IAApiRate, 2)
+	iaLimiter := ratelimit.NewLimiter(cfg.IAApiRate)
 	bwLimiter := rate.NewLimiter(rate.Limit(cfg.ThrottleBPS), cfg.ThrottleBPS)
 
 	stuckTicker := time.NewTicker(5 * time.Minute)
@@ -95,7 +94,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 						Timestamp: time.Now(),
 						Message:   "Coordinator started (collection discovery)",
 					}
-					go coordinatorLoop(cfg, sqlDB, events, coordStopCh, metrics)
+					go coordinatorLoop(cfg, sqlDB, events, coordStopCh, metrics, iaLimiter)
 				}
 			case tui.CmdStopCoordinator:
 				if coordRunning {
@@ -121,7 +120,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 					WorkerID:   rID,
 					Message:    fmt.Sprintf("Resolver %s started (pool: %d)", rID, resolverCount),
 				}
-				go albumResolverLoop(sqlDB, events, stopCh, dbMu, iaClient, metaLimiter, rID, metrics)
+				go albumResolverLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, rID, metrics)
 			case tui.CmdRemoveResolver:
 				if resolverCount > 0 {
 					resolverCount--
@@ -150,7 +149,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 					WorkerID:   wID,
 					Message:    fmt.Sprintf("Analyzer %s started (pool: %d)", wID, workerCount),
 				}
-				go workerLoop(cfg, sqlDB, events, stopCh, dbMu, clapClient, iaClient, wID, metrics, downloadLimiter, bwLimiter)
+				go workerLoop(cfg, sqlDB, events, stopCh, dbMu, clapClient, iaClient, wID, metrics, iaLimiter, bwLimiter)
 			case tui.CmdRemoveWorker:
 				if workerCount > 0 {
 					workerCount--
@@ -213,10 +212,9 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 	}
 }
 
-func coordinatorLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{}, metrics *tui.Metrics) {
+func coordinatorLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{}, metrics *tui.Metrics, iaLimiter *ratelimit.Limiter) {
 	client := ia.NewClient(60 * time.Second)
 	client.Transport = tui.NewInstrumentedTransport(metrics)
-	limiter := ratelimit.NewLimiter(cfg.IAApiRate)
 
 	denylist := loadDenylist(cfg.LibrivoxDenylistPath)
 	if len(denylist) > 0 {
@@ -278,7 +276,7 @@ func coordinatorLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activit
 		default:
 		}
 
-		discovered, err := discoverCollection(cfg, sqlDB, client, limiter, events, stopCh, coll, i+1, len(collections), denylist)
+		discovered, err := discoverCollection(cfg, sqlDB, client, iaLimiter, events, stopCh, coll, i+1, len(collections), denylist)
 		if err != nil {
 			events <- tui.ActivityEvent{
 				Type:         tui.EventCollectionFailed,
@@ -301,7 +299,7 @@ func coordinatorLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activit
 	}
 }
 
-func discoverCollection(cfg *config.Config, sqlDB *db.DB, client *http.Client, limiter *ratelimit.Limiter,
+func discoverCollection(cfg *config.Config, sqlDB *db.DB, client *http.Client, iaLimiter *ratelimit.Limiter,
 	events chan<- tui.ActivityEvent, stopCh <-chan struct{}, coll db.Collection, idx, total int, denylist map[string]bool) (int, error) {
 
 	events <- tui.ActivityEvent{
@@ -326,7 +324,7 @@ func discoverCollection(cfg *config.Config, sqlDB *db.DB, client *http.Client, l
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := limiter.Wait(ctx); err != nil {
+		if err := iaLimiter.Wait(ctx); err != nil {
 			cancel()
 			return discovered, fmt.Errorf("rate limiter: %w", err)
 		}
@@ -407,7 +405,7 @@ func discoverCollection(cfg *config.Config, sqlDB *db.DB, client *http.Client, l
 }
 
 func albumResolverLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
-	dbMu *sync.Mutex, iaClient *http.Client, metaLimiter *ratelimit.Limiter, resolverID string, metrics *tui.Metrics) {
+	dbMu *sync.Mutex, iaClient *http.Client, iaLimiter *ratelimit.Limiter, resolverID string, metrics *tui.Metrics) {
 	for {
 		select {
 		case <-stopCh:
@@ -435,7 +433,7 @@ func albumResolverLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-c
 			continue
 		}
 
-		resolveAlbum(sqlDB, events, dbMu, iaClient, metaLimiter, resolverID, albumID, metrics)
+		resolveAlbum(sqlDB, events, dbMu, iaClient, iaLimiter, resolverID, albumID, metrics)
 	}
 }
 
@@ -457,7 +455,7 @@ func main() {
 
 func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
 	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, metrics *tui.Metrics,
-	downloadLimiter *ratelimit.Limiter, bwLimiter *rate.Limiter) {
+	iaLimiter *ratelimit.Limiter, bwLimiter *rate.Limiter) {
 	batchSize := 2
 	consecutiveFailures := 0
 	const maxConsecutiveFailures = 5
@@ -516,7 +514,7 @@ func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEven
 					return
 				default:
 				}
-				ok := analyzeTrack(cfg, sqlDB, events, dbMu, clapClient, iaClient, workerID, track, metrics, downloadLimiter, bwLimiter)
+				ok := analyzeTrack(cfg, sqlDB, events, dbMu, clapClient, iaClient, workerID, track, metrics, iaLimiter, bwLimiter)
 				if ok {
 					consecutiveFailures = 0
 				} else {
@@ -533,7 +531,7 @@ func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEven
 
 func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent,
 	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, track db.ClaimedTrack, metrics *tui.Metrics,
-	downloadLimiter *ratelimit.Limiter, bwLimiter *rate.Limiter) bool {
+	iaLimiter *ratelimit.Limiter, bwLimiter *rate.Limiter) bool {
 
 	trackLabel := track.Title
 	if trackLabel == "" {
@@ -549,7 +547,7 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	if err := downloadLimiter.Wait(ctx); err != nil {
+	if err := iaLimiter.Wait(ctx); err != nil {
 		cancel()
 		errMsg := fmt.Sprintf("rate limit: %v", err)
 		dbMu.Lock()
@@ -683,7 +681,7 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 }
 
 func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, dbMu *sync.Mutex,
-	iaClient *http.Client, metaLimiter *ratelimit.Limiter, workerID, albumID string, metrics *tui.Metrics) {
+	iaClient *http.Client, iaLimiter *ratelimit.Limiter, workerID, albumID string, metrics *tui.Metrics) {
 
 	events <- tui.ActivityEvent{
 		Type:       tui.EventAlbumResolving,
@@ -694,7 +692,7 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, dbMu *sync.Mute
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := metaLimiter.Wait(ctx); err != nil {
+	if err := iaLimiter.Wait(ctx); err != nil {
 		cancel()
 		errMsg := fmt.Sprintf("rate limit: %v", err)
 		dbMu.Lock()
