@@ -120,36 +120,6 @@
     "notes": "Voice of America Music Time in Africa broadcasts"
   },
   {
-    "id": "bostonsymphonyorchestra",
-    "title": "Boston Symphony Orchestra",
-    "category": "classical",
-    "curator": "Boston Symphony Orchestra",
-    "url": "https://archive.org/details/bostonsymphonyorchestra",
-    "query": "collection:bostonsymphonyorchestra AND -subject:\"spoken word\" AND -mediatype:audiobook",
-    "item_count": 1500,
-    "notes": "Boston Symphony Orchestra recordings"
-  },
-  {
-    "id": "laphil",
-    "title": "LA Philharmonic",
-    "category": "classical",
-    "curator": "Los Angeles Philharmonic",
-    "url": "https://archive.org/details/laphil",
-    "query": "collection:laphil AND -subject:\"spoken word\" AND -mediatype:audiobook",
-    "item_count": 1000,
-    "notes": "Los Angeles Philharmonic recordings"
-  },
-  {
-    "id": "phillipslibraryearlymusic",
-    "title": "Phillips Library Early Music",
-    "category": "classical",
-    "curator": "Phillips Library",
-    "url": "https://archive.org/details/phillipslibraryearlymusic",
-    "query": "collection:phillipslibraryearlymusic AND -subject:\"spoken word\" AND -mediatype:audiobook",
-    "item_count": 600,
-    "notes": "Phillips Library early music collection"
-  },
-  {
     "id": "vinyl_robert-haber-records",
     "title": "Robert Haber Vinyl Records",
     "category": "vinyl",
@@ -168,15 +138,6 @@
     "query": "collection:sfjazz AND -subject:\"spoken word\" AND -mediatype:audiobook",
     "item_count": 1000,
     "notes": "SFJAZZ recordings and performances"
-  },
-  {
-    "id": "paladinos",
-    "title": "Paladinos Collection",
-    "category": "music",
-    "curator": "",
-    "url": "https://archive.org/details/paladinos",
-    "query": "collection:paladinos AND -subject:\"spoken word\" AND -mediatype:audiobook",
-    "item_count": 400,
-    "notes": "Paladinos music collection"
   }
 ]
+
