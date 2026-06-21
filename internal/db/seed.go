@@ -29,7 +29,10 @@ func SeedCollectionsIfEmpty(sqlDB *sql.DB) (int64, error) {
 	if count > 0 {
 		return 0, nil
 	}
+	return SeedCollections(sqlDB)
+}
 
+func SeedCollections(sqlDB *sql.DB) (int64, error) {
 	var seeds []seedCollection
 	if err := json.Unmarshal(seedCollectionsJSON, &seeds); err != nil {
 		return 0, fmt.Errorf("parse seed data: %w", err)

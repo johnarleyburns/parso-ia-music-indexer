@@ -74,6 +74,7 @@ func (db *DB) migrate() error {
 			error_message TEXT,
 			downloads     INTEGER NOT NULL DEFAULT 0,
 			retry_count   INTEGER NOT NULL DEFAULT 0,
+			prechecked    INTEGER NOT NULL DEFAULT 0,
 			created_at    TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
@@ -154,6 +155,17 @@ func (db *DB) migrateSchemaChanges() error {
 
 	if tableExists(db.Conn, "tracks") && !columnExists(db.Conn, "tracks", "duration") {
 		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN duration REAL")
+	}
+
+	if tableExists(db.Conn, "albums") && !columnExists(db.Conn, "albums", "prechecked") {
+		if _, err := db.Conn.Exec("ALTER TABLE albums ADD COLUMN prechecked INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return fmt.Errorf("add prechecked column: %w", err)
+		}
+		if _, err := db.Conn.Exec(`UPDATE albums SET prechecked = 1 WHERE ia_identifier IN (
+			SELECT DISTINCT t.album_id FROM tracks t WHERE t.status = 'completed'
+		)`); err != nil {
+			return fmt.Errorf("backfill prechecked: %w", err)
+		}
 	}
 
 	return nil

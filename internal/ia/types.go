@@ -23,6 +23,22 @@ const (
 	DefaultCount = 1000
 )
 
+type FlexBool bool
+
+func (fb *FlexBool) UnmarshalJSON(data []byte) error {
+	var b bool
+	if err := json.Unmarshal(data, &b); err == nil {
+		*fb = FlexBool(b)
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*fb = FlexBool(s == "true")
+		return nil
+	}
+	return fmt.Errorf("cannot unmarshal %s into FlexBool", string(data))
+}
+
 type IAFullMetadataResponse struct {
 	Metadata IAItemMetadata   `json:"metadata"`
 	Files    []IAMetadataFile `json:"files"`
@@ -33,7 +49,7 @@ type IAItemMetadata struct {
 	Title                string          `json:"title"`
 	Creator              json.RawMessage `json:"creator"`
 	Collection           json.RawMessage `json:"collection"`
-	AccessRestrictedItem bool            `json:"access-restricted-item"`
+	AccessRestrictedItem FlexBool        `json:"access-restricted-item"`
 }
 
 func (m *IAItemMetadata) CreatorString() string {
@@ -72,12 +88,13 @@ type IAMetadataFile struct {
 }
 
 type AlbumMetadata struct {
-	Identifier string
-	Title      string
-	Creator    string
-	Collection string
-	ArtURL     string
-	Tracks     []TrackFile
+	Identifier           string
+	Title                string
+	Creator              string
+	Collection           string
+	ArtURL               string
+	Tracks               []TrackFile
+	AccessRestrictedItem bool
 }
 
 type TrackFile struct {

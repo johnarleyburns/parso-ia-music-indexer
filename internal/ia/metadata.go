@@ -42,11 +42,12 @@ func LookupAlbumMetadata(ctx context.Context, client *http.Client, identifier st
 	}
 
 	album := &AlbumMetadata{
-		Identifier: identifier,
-		Title:      full.Metadata.Title,
-		Creator:    full.Metadata.CreatorString(),
-		Collection: full.Metadata.CollectionString(),
-		ArtURL:     fmt.Sprintf("https://archive.org/services/img/%s", identifier),
+		Identifier:           identifier,
+		Title:                full.Metadata.Title,
+		Creator:              full.Metadata.CreatorString(),
+		Collection:           full.Metadata.CollectionString(),
+		ArtURL:               fmt.Sprintf("https://archive.org/services/img/%s", identifier),
+		AccessRestrictedItem: bool(full.Metadata.AccessRestrictedItem),
 	}
 
 	if full.Metadata.AccessRestrictedItem {

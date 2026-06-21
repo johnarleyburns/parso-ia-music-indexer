@@ -193,6 +193,7 @@ func TestInsertTracksAndClaim(t *testing.T) {
 	db := testDB(t)
 	BulkInsertAlbums(db.Conn, testAlbumInserts("album-a"))
 	MarkAlbumResolved(db.Conn, "album-a", "Album A", "", "", "", 0)
+	db.Conn.Exec(`UPDATE albums SET prechecked = 1 WHERE ia_identifier = 'album-a'`)
 
 	tracks := []TrackInsert{
 		{Filename: "01-song.mp3", Title: "Song One", TrackNumber: 1, Format: "VBR MP3", DownloadURL: "https://example.com/01.mp3"},
@@ -238,6 +239,7 @@ func TestMarkTrackFailed(t *testing.T) {
 	db := testDB(t)
 	BulkInsertAlbums(db.Conn, testAlbumInserts("album-a"))
 	MarkAlbumResolved(db.Conn, "album-a", "", "", "", "", 0)
+	db.Conn.Exec(`UPDATE albums SET prechecked = 1 WHERE ia_identifier = 'album-a'`)
 	InsertTracks(db.Conn, "album-a", []TrackInsert{
 		{Filename: "song.mp3", Title: "Song", TrackNumber: 1, Format: "VBR MP3", DownloadURL: "https://example.com/song.mp3"},
 	})
@@ -257,6 +259,7 @@ func TestResetStuckTracks(t *testing.T) {
 	db := testDB(t)
 	BulkInsertAlbums(db.Conn, testAlbumInserts("album-a"))
 	MarkAlbumResolved(db.Conn, "album-a", "", "", "", "", 0)
+	db.Conn.Exec(`UPDATE albums SET prechecked = 1 WHERE ia_identifier = 'album-a'`)
 	InsertTracks(db.Conn, "album-a", []TrackInsert{
 		{Filename: "a.mp3", Title: "A", TrackNumber: 1, Format: "VBR MP3", DownloadURL: "https://example.com/a.mp3"},
 		{Filename: "b.mp3", Title: "B", TrackNumber: 2, Format: "VBR MP3", DownloadURL: "https://example.com/b.mp3"},
@@ -307,6 +310,7 @@ func setupTrackWithEmbedding(t *testing.T, db *DB, albumID, filename, title stri
 	t.Helper()
 	BulkInsertAlbums(db.Conn, testAlbumInserts(albumID))
 	MarkAlbumResolved(db.Conn, albumID, albumID, "", "", "", 0)
+	db.Conn.Exec(`UPDATE albums SET prechecked = 1 WHERE ia_identifier = ?`, albumID)
 	InsertTracks(db.Conn, albumID, []TrackInsert{
 		{Filename: filename, Title: title, TrackNumber: trackNum, Format: "VBR MP3", DownloadURL: "https://example.com/" + filename},
 	})

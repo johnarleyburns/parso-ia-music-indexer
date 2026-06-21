@@ -1,5 +1,15 @@
 [
   {
+    "id": "aadamjacobs",
+    "title": "Aadam Jacobs Collection",
+    "category": "music",
+    "curator": "",
+    "url": "https://archive.org/details/aadamjacobs",
+    "query": "collection:aadamjacobs AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 500,
+    "notes": "Aadam Jacobs music collection"
+  },
+  {
     "id": "vinyl_bostonpubliclibrary",
     "title": "Boston Public Library LP Collection",
     "category": "vinyl",
@@ -8,5 +18,165 @@
     "query": "collection:vinyl_bostonpubliclibrary AND -subject:\"spoken word\" AND -mediatype:audiobook AND -subject:\"poetry\" AND -subject:\"speeches\" AND -subject:\"comedy\" AND -subject:\"drama\" AND -creator:\"LibriVox\"",
     "item_count": 5000,
     "notes": "Boston Public Library vinyl LP digitization project, excluding spoken word material"
+  },
+  {
+    "id": "crucialriddim_music",
+    "title": "Crucial Riddim Music",
+    "category": "electronic",
+    "curator": "",
+    "url": "https://archive.org/details/crucialriddim_music",
+    "query": "collection:crucialriddim_music AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 300,
+    "notes": "UK bass and electronic music collection"
+  },
+  {
+    "id": "cujazz",
+    "title": "CU Jazz Collection",
+    "category": "jazz",
+    "curator": "",
+    "url": "https://archive.org/details/cujazz",
+    "query": "collection:cujazz AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 200,
+    "notes": "Colombian university jazz collection"
+  },
+  {
+    "id": "vinyl_frank-defreytas-memoria-opera",
+    "title": "Frank DeFreytas Memorial Opera Collection",
+    "category": "classical",
+    "curator": "Frank DeFreytas",
+    "url": "https://archive.org/details/vinyl_frank-defreytas-memoria-opera",
+    "query": "collection:vinyl_frank-defreytas-memoria-opera AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 1000,
+    "notes": "Opera vinyl collection from Frank DeFreytas"
+  },
+  {
+    "id": "musica-campesina",
+    "title": "Musica Campesina",
+    "category": "folk",
+    "curator": "",
+    "url": "https://archive.org/details/musica-campesina",
+    "query": "collection:musica-campesina AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 300,
+    "notes": "Campesino folk music collection"
+  },
+  {
+    "id": "music-of-the-world-istanbul",
+    "title": "Music of the World - Istanbul",
+    "category": "world",
+    "curator": "",
+    "url": "https://archive.org/details/music-of-the-world-istanbul",
+    "query": "collection:music-of-the-world-istanbul AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 500,
+    "notes": "World music from Istanbul collection"
+  },
+  {
+    "id": "imcradio",
+    "title": "IMC Radio",
+    "category": "radio",
+    "curator": "",
+    "url": "https://archive.org/details/imcradio",
+    "query": "collection:imcradio AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 600,
+    "notes": "IMC radio broadcasts"
+  },
+  {
+    "id": "russian_classical_collection",
+    "title": "Russian Classical Collection",
+    "category": "classical",
+    "curator": "",
+    "url": "https://archive.org/details/russian_classical_collection",
+    "query": "collection:russian_classical_collection AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 800,
+    "notes": "Russian classical music collection"
+  },
+  {
+    "id": "tedjonespiano",
+    "title": "Ted Jones Piano",
+    "category": "classical",
+    "curator": "Ted Jones",
+    "url": "https://archive.org/details/tedjonespiano",
+    "query": "collection:tedjonespiano AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 200,
+    "notes": "Ted Jones piano recordings"
+  },
+  {
+    "id": "davidwnivenjazz",
+    "title": "David W. Niven Jazz Collection",
+    "category": "jazz",
+    "curator": "David W. Niven",
+    "url": "https://archive.org/details/davidwnivenjazz",
+    "query": "collection:davidwnivenjazz AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 1200,
+    "notes": "David W. Niven jazz collection"
+  },
+  {
+    "id": "voa-music-time-in-africa",
+    "title": "VOA Music Time in Africa",
+    "category": "world",
+    "curator": "Voice of America",
+    "url": "https://archive.org/details/voa-music-time-in-africa",
+    "query": "collection:voa-music-time-in-africa AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 400,
+    "notes": "Voice of America Music Time in Africa broadcasts"
+  },
+  {
+    "id": "bostonsymphonyorchestra",
+    "title": "Boston Symphony Orchestra",
+    "category": "classical",
+    "curator": "Boston Symphony Orchestra",
+    "url": "https://archive.org/details/bostonsymphonyorchestra",
+    "query": "collection:bostonsymphonyorchestra AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 1500,
+    "notes": "Boston Symphony Orchestra recordings"
+  },
+  {
+    "id": "laphil",
+    "title": "LA Philharmonic",
+    "category": "classical",
+    "curator": "Los Angeles Philharmonic",
+    "url": "https://archive.org/details/laphil",
+    "query": "collection:laphil AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 1000,
+    "notes": "Los Angeles Philharmonic recordings"
+  },
+  {
+    "id": "phillipslibraryearlymusic",
+    "title": "Phillips Library Early Music",
+    "category": "classical",
+    "curator": "Phillips Library",
+    "url": "https://archive.org/details/phillipslibraryearlymusic",
+    "query": "collection:phillipslibraryearlymusic AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 600,
+    "notes": "Phillips Library early music collection"
+  },
+  {
+    "id": "vinyl_robert-haber-records",
+    "title": "Robert Haber Vinyl Records",
+    "category": "vinyl",
+    "curator": "Robert Haber",
+    "url": "https://archive.org/details/vinyl_robert-haber-records",
+    "query": "collection:vinyl_robert-haber-records AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 800,
+    "notes": "Robert Haber vinyl record collection"
+  },
+  {
+    "id": "sfjazz",
+    "title": "SFJAZZ Collection",
+    "category": "jazz",
+    "curator": "SFJAZZ",
+    "url": "https://archive.org/details/sfjazz",
+    "query": "collection:sfjazz AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 1000,
+    "notes": "SFJAZZ recordings and performances"
+  },
+  {
+    "id": "paladinos",
+    "title": "Paladinos Collection",
+    "category": "music",
+    "curator": "",
+    "url": "https://archive.org/details/paladinos",
+    "query": "collection:paladinos AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "item_count": 400,
+    "notes": "Paladinos music collection"
   }
 ]

@@ -18,6 +18,7 @@ type Config struct {
 	ClapSidecarDir      string
 	SearchText          string
 	LibrivoxDenylistPath string
+	SeedCollections      bool
 }
 
 func Parse() *Config {
@@ -34,6 +35,7 @@ func Parse() *Config {
 	flag.StringVar(&cfg.ClapSidecarDir, "clap-sidecar-dir", envOrDefault("CLAP_SIDECAR_DIR", "python_sidecar"), "Path to CLAP Python sidecar directory")
 	flag.StringVar(&cfg.SearchText, "search-text", "", "Search indexed tracks by text query (CLAP text-to-audio)")
 	flag.StringVar(&cfg.LibrivoxDenylistPath, "librivox-denylist", envOrDefault("LIBRIVOX_DENYLIST", "data/librivox_denylist.json"), "Path to LibriVox denylist JSON file")
+	flag.BoolVar(&cfg.SeedCollections, "seed-collections", false, "Seed all collections from embedded JSON (INSERT OR IGNORE)")
 	flag.Parse()
 
 	return cfg

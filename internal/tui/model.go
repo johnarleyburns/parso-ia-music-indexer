@@ -70,10 +70,11 @@ type MainModel struct {
 	DBPath   string
 	Resources ResourceStats
 
-	Dashboard DashboardModel
-	LiveLog   LiveLogModel
-	Browse    BrowseModel
-	Player    PlayerModel
+	Dashboard   DashboardModel
+	LiveLog     LiveLogModel
+	Browse      BrowseModel
+	Player      PlayerModel
+	Collections CollectionsModel
 
 	Help help.Model
 	Keys keyMap
@@ -86,7 +87,7 @@ type MainModel struct {
 func NewMainModel(cfg *config.Config, sqlDB *sql.DB, events chan ActivityEvent, controls chan ControlCmd, metrics *Metrics, dbPath string) MainModel {
 	return MainModel{
 		Config:    cfg,
-		Tabs:      []string{"Dashboard", "Live Log", "Browse", "Player"},
+		Tabs:      []string{"Dashboard", "Live Log", "Browse", "Player", "Collections"},
 		ActiveTab: 0,
 		DB:        sqlDB,
 		Events:    events,
@@ -96,8 +97,9 @@ func NewMainModel(cfg *config.Config, sqlDB *sql.DB, events chan ActivityEvent, 
 		Dashboard: NewDashboardModel(sqlDB),
 		LiveLog:   NewLiveLogModel(),
 		Browse:    NewBrowseModel(sqlDB),
-		Player:    NewPlayerModel(sqlDB),
-		Help:      help.New(),
+		Player:      NewPlayerModel(sqlDB),
+		Collections: NewCollectionsModel(sqlDB),
+		Help:        help.New(),
 		Keys:      keys,
 	}
 }
@@ -145,6 +147,11 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.ActiveTab == 3 {
 			var cmd tea.Cmd
 			m.Player, cmd = m.Player.Update(msg)
+			return m, cmd
+		}
+		if m.ActiveTab == 4 {
+			var cmd tea.Cmd
+			m.Collections, cmd = m.Collections.Update(msg)
 			return m, cmd
 		}
 		return m, nil
@@ -211,10 +218,16 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "w":
 				m.Controls <- ControlCmd{Action: CmdAddWorker}
 				return m, nil
-			case "W":
-				m.Controls <- ControlCmd{Action: CmdRemoveWorker}
-				return m, nil
-			case "F":
+		case "W":
+			m.Controls <- ControlCmd{Action: CmdRemoveWorker}
+			return m, nil
+		case "c":
+			m.Controls <- ControlCmd{Action: CmdAddCleaner}
+			return m, nil
+		case "C":
+			m.Controls <- ControlCmd{Action: CmdRemoveCleaner}
+			return m, nil
+		case "F":
 				m.Controls <- ControlCmd{Action: CmdResetFailed}
 				return m, nil
 			}
@@ -249,6 +262,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.LiveLog, _ = m.LiveLog.Update(msg)
 		m.Browse, _ = m.Browse.Update(msg)
 		m.Player, _ = m.Player.Update(msg)
+		m.Collections, _ = m.Collections.Update(msg)
 		return m, cmd
 
 	case statsRefreshMsg:
@@ -269,6 +283,11 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.Player, cmd = m.Player.Update(msg)
 		return m, cmd
+
+	case collectionsRefreshMsg:
+		var cmd tea.Cmd
+		m.Collections, cmd = m.Collections.Update(msg)
+		return m, cmd
 	}
 
 	var cmd tea.Cmd
@@ -281,6 +300,8 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Browse, cmd = m.Browse.Update(msg)
 	case 3:
 		m.Player, cmd = m.Player.Update(msg)
+	case 4:
+		m.Collections, cmd = m.Collections.Update(msg)
 	}
 
 	return m, cmd
@@ -303,6 +324,8 @@ func (m MainModel) View() tea.View {
 		content = m.Browse.View().Content
 	case 3:
 		content = m.Player.View().Content
+	case 4:
+		content = m.Collections.View().Content
 	}
 
 	helpView := m.Help.View(m.Keys)
@@ -360,6 +383,11 @@ func (m *MainModel) onTabSwitch(from, to int) tea.Cmd {
 		m.Browse.searchInput.Blur()
 		m.Browse.table.Blur()
 		m.Browse.inputFocused = false
+	}
+	if to == 4 {
+		var cmd tea.Cmd
+		m.Collections, cmd = m.Collections.Update(tea.WindowSizeMsg{Width: m.Width, Height: m.Height})
+		return tea.Batch(cmd, m.Collections.doRefresh())
 	}
 	return nil
 }

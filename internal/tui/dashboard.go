@@ -45,6 +45,9 @@ type DashboardModel struct {
 	AnalyzerCount  int
 	AnalyzerStates map[string]*workerState
 
+	CleanerCount  int
+	CleanerStates map[string]*workerState
+
 	Events []ActivityEvent
 }
 
@@ -58,6 +61,8 @@ func NewDashboardModel(sqlDB *sql.DB) DashboardModel {
 		ResolverStates:  make(map[string]*workerState),
 		AnalyzerCount:   0,
 		AnalyzerStates:  make(map[string]*workerState),
+		CleanerCount:    0,
+		CleanerStates:   make(map[string]*workerState),
 		Events:          make([]ActivityEvent, 0),
 	}
 }
@@ -68,6 +73,10 @@ func (m DashboardModel) Init() tea.Cmd {
 
 func isResolver(id string) bool {
 	return strings.HasPrefix(id, "resolver-")
+}
+
+func isCleaner(id string) bool {
+	return strings.HasPrefix(id, "cleaner-")
 }
 
 func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
@@ -108,40 +117,52 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 			m.CoordCurrentCollection = ""
 		case EventCollectionFailed:
 			m.CoordCurrentCollection = ""
-		case EventWorkerStarted:
-			if msg.WorkerID != "" {
-				if isResolver(msg.WorkerID) {
-					m.ResolverCount++
-					m.ResolverStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
-				} else {
-					m.AnalyzerCount++
-					m.AnalyzerStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
-				}
+	case EventWorkerStarted:
+		if msg.WorkerID != "" {
+			if isResolver(msg.WorkerID) {
+				m.ResolverCount++
+				m.ResolverStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
+			} else if isCleaner(msg.WorkerID) {
+				m.CleanerCount++
+				m.CleanerStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
+			} else {
+				m.AnalyzerCount++
+				m.AnalyzerStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
 			}
-		case EventWorkerStopped:
-			if msg.WorkerID != "" {
-				if isResolver(msg.WorkerID) {
-					if m.ResolverCount > 0 {
-						m.ResolverCount--
-					}
-					delete(m.ResolverStates, msg.WorkerID)
-				} else {
-					if m.AnalyzerCount > 0 {
-						m.AnalyzerCount--
-					}
-					delete(m.AnalyzerStates, msg.WorkerID)
+		}
+	case EventWorkerStopped:
+		if msg.WorkerID != "" {
+			if isResolver(msg.WorkerID) {
+				if m.ResolverCount > 0 {
+					m.ResolverCount--
+				}
+				delete(m.ResolverStates, msg.WorkerID)
+			} else if isCleaner(msg.WorkerID) {
+				if m.CleanerCount > 0 {
+					m.CleanerCount--
+				}
+				delete(m.CleanerStates, msg.WorkerID)
+			} else {
+				if m.AnalyzerCount > 0 {
+					m.AnalyzerCount--
+				}
+				delete(m.AnalyzerStates, msg.WorkerID)
+			}
+		} else {
+			if strings.Contains(msg.Message, "Resolver") {
+				if m.ResolverCount > 0 {
+					m.ResolverCount--
+				}
+			} else if strings.Contains(msg.Message, "Cleaner") {
+				if m.CleanerCount > 0 {
+					m.CleanerCount--
 				}
 			} else {
-				if strings.Contains(msg.Message, "Resolver") {
-					if m.ResolverCount > 0 {
-						m.ResolverCount--
-					}
-				} else {
-					if m.AnalyzerCount > 0 {
-						m.AnalyzerCount--
-					}
+				if m.AnalyzerCount > 0 {
+					m.AnalyzerCount--
 				}
 			}
+		}
 		case EventAlbumResolving:
 			if msg.WorkerID != "" {
 				if ws, ok := m.ResolverStates[msg.WorkerID]; ok {
@@ -159,6 +180,17 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 			if msg.WorkerID != "" {
 				if ws, ok := m.ResolverStates[msg.WorkerID]; ok {
 					ws.FailedCount++
+					ws.CurrentTask = ""
+				}
+				if ws, ok := m.CleanerStates[msg.WorkerID]; ok {
+					ws.FailedCount++
+					ws.CurrentTask = ""
+				}
+			}
+		case EventAlbumPrechecked:
+			if msg.WorkerID != "" {
+				if ws, ok := m.CleanerStates[msg.WorkerID]; ok {
+					ws.ProcessedCount++
 					ws.CurrentTask = ""
 				}
 			}
@@ -287,8 +319,9 @@ func (m DashboardModel) buildRightPanel(titleStyle, panelBorder lipgloss.Style, 
 	coordSection := m.buildCoordinatorSection(sectionTitle)
 	resolverSection := m.buildPoolSection(sectionTitle, "Resolver Pool", m.ResolverCount, m.ResolverStates, "[r] add  [R] remove")
 	analyzerSection := m.buildPoolSection(sectionTitle, "Analyzer Pool", m.AnalyzerCount, m.AnalyzerStates, "[w] add  [W] remove")
+	cleanerSection := m.buildPoolSection(sectionTitle, "Cleaner Pool", m.CleanerCount, m.CleanerStates, "[c] add  [C] remove")
 
-	controlsHeight := lipgloss.Height(coordSection) + lipgloss.Height(resolverSection) + lipgloss.Height(analyzerSection) + 4
+	controlsHeight := lipgloss.Height(coordSection) + lipgloss.Height(resolverSection) + lipgloss.Height(analyzerSection) + lipgloss.Height(cleanerSection) + 5
 	availHeight := m.Height - 7
 	feedHeight := availHeight - controlsHeight
 	if feedHeight < 4 {
@@ -299,7 +332,7 @@ func (m DashboardModel) buildRightPanel(titleStyle, panelBorder lipgloss.Style, 
 	feedContent += RenderActivityFeed(m.Events, width-4, feedHeight-1)
 
 	controlsPanel := panelBorder.Width(width).Render(
-		coordSection + "\n" + resolverSection + "\n" + analyzerSection,
+		coordSection + "\n" + resolverSection + "\n" + analyzerSection + "\n" + cleanerSection,
 	)
 	feedPanel := panelBorder.Width(width).Render(feedContent)
 
