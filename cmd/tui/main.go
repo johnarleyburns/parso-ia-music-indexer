@@ -62,6 +62,10 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 	nextCleanerID := 1
 	cleanerStopChs := make(map[int]chan struct{})
 
+	enhancerCount := 0
+	nextEnhancerID := 1
+	enhancerStopChs := make(map[int]chan struct{})
+
 	dbMu := &sync.Mutex{}
 	iaClient := ia.NewClient(60 * time.Second)
 	iaClient.Transport = tui.NewInstrumentedTransport(metrics)
@@ -79,7 +83,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 	events <- tui.ActivityEvent{
 		Type:      tui.EventInfo,
 		Timestamp: time.Now(),
-		Message:   fmt.Sprintf("Application started. %s. [s] coordinator  [r] resolvers  [w] analyzers  [c] cleaners", collMsg),
+		Message:   fmt.Sprintf("Application started. %s. [s] coordinator  [r] resolvers  [w] analyzers  [c] cleaners  [e] enhancers", collMsg),
 	}
 
 	for {
@@ -198,6 +202,35 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 			}
 		}
 
+	case tui.CmdAddEnhancer:
+		enhancerCount++
+		eID := fmt.Sprintf("enhancer-%d", nextEnhancerID)
+		nextEnhancerID++
+		stopCh := make(chan struct{})
+		enhancerStopChs[nextEnhancerID-1] = stopCh
+		events <- tui.ActivityEvent{
+			Type:       tui.EventWorkerStarted,
+			Timestamp:  time.Now(),
+			Identifier: eID,
+			WorkerID:   eID,
+			Message:    fmt.Sprintf("Enhancer %s started (pool: %d)", eID, enhancerCount),
+		}
+		go tagEnhancerLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, eID, metrics)
+	case tui.CmdRemoveEnhancer:
+		if enhancerCount > 0 {
+			enhancerCount--
+			for id, ch := range enhancerStopChs {
+				close(ch)
+				delete(enhancerStopChs, id)
+				break
+			}
+			events <- tui.ActivityEvent{
+				Type:      tui.EventWorkerStopped,
+				Timestamp: time.Now(),
+				Message:   fmt.Sprintf("Enhancer removed (pool: %d)", enhancerCount),
+			}
+		}
+
 			case tui.CmdShutdown:
 				if coordRunning {
 					close(coordStopCh)
@@ -209,6 +242,9 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 			close(ch)
 		}
 		for _, ch := range cleanerStopChs {
+			close(ch)
+		}
+		for _, ch := range enhancerStopChs {
 			close(ch)
 		}
 		return
@@ -695,6 +731,125 @@ func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEven
 	}
 }
 
+func tagEnhancerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
+	dbMu *sync.Mutex, iaClient *http.Client, iaLimiter *ratelimit.Limiter, workerID string, metrics *tui.Metrics) {
+	for {
+		select {
+		case <-stopCh:
+			return
+		default:
+		}
+
+		dbMu.Lock()
+		album, err := db.ClaimUntaggedAlbum(sqlDB.Conn)
+		dbMu.Unlock()
+		if err != nil {
+			events <- tui.ActivityEvent{
+				Type:      tui.EventInfo,
+				Timestamp: time.Now(),
+				WorkerID:  workerID,
+				Message:   fmt.Sprintf("[%s] Claim untagged album error: %v", workerID, err),
+				Error:     err.Error(),
+			}
+			sleepOrStop(10*time.Second, stopCh)
+			continue
+		}
+
+		if album == nil {
+			sleepOrStop(15*time.Second, stopCh)
+			continue
+		}
+
+		events <- tui.ActivityEvent{
+			Type:       tui.EventInfo,
+			Timestamp:  time.Now(),
+			Identifier: album.IAIdentifier,
+			WorkerID:   workerID,
+			Message:    fmt.Sprintf("[%s] Enhancing tags for %s (%d tracks)", workerID, album.IAIdentifier, album.TrackCount),
+		}
+
+		subjects := album.Subjects
+		genres := album.Genres
+
+		if subjects == "" || genres == "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if err := iaLimiter.Wait(ctx); err != nil {
+				cancel()
+				sleepOrStop(10*time.Second, stopCh)
+				continue
+			}
+			meta, metaErr := ia.LookupAlbumMetadata(ctx, iaClient, album.IAIdentifier)
+			cancel()
+			if metaErr != nil {
+				events <- tui.ActivityEvent{
+					Type:       tui.EventInfo,
+					Timestamp:  time.Now(),
+					Identifier: album.IAIdentifier,
+					WorkerID:   workerID,
+					Message:    fmt.Sprintf("[%s] Metadata fetch error %s: %v", workerID, album.IAIdentifier, metaErr),
+					Error:      metaErr.Error(),
+				}
+				sleepOrStop(5*time.Second, stopCh)
+				continue
+			}
+			subjects = strings.Join(meta.Subjects, ", ")
+			genres = strings.Join(meta.Genres, ", ")
+
+			dbMu.Lock()
+			if err := db.UpdateAlbumMetadata(sqlDB.Conn, album.IAIdentifier, subjects, genres); err != nil {
+				dbMu.Unlock()
+				events <- tui.ActivityEvent{
+					Type:       tui.EventInfo,
+					Timestamp:  time.Now(),
+					Identifier: album.IAIdentifier,
+					WorkerID:   workerID,
+					Message:    fmt.Sprintf("[%s] Storing album metadata error %s: %v", workerID, album.IAIdentifier, err),
+					Error:      err.Error(),
+				}
+				continue
+			}
+			dbMu.Unlock()
+		}
+
+		var subjectsSlice, genresSlice []string
+		if subjects != "" {
+			subjectsSlice = strings.Split(subjects, ", ")
+		}
+		if genres != "" {
+			genresSlice = strings.Split(genres, ", ")
+		}
+
+		tags := db.GenerateTags(album.IAIdentifier, album.Title, album.Creator, subjectsSlice, genresSlice)
+		if tags == "" {
+			continue
+		}
+
+		dbMu.Lock()
+		if err := db.UpdateTracksTags(sqlDB.Conn, album.IAIdentifier, tags); err != nil {
+			dbMu.Unlock()
+			events <- tui.ActivityEvent{
+				Type:       tui.EventInfo,
+				Timestamp:  time.Now(),
+				Identifier: album.IAIdentifier,
+				WorkerID:   workerID,
+				Message:    fmt.Sprintf("[%s] Storing track tags error %s: %v", workerID, album.IAIdentifier, err),
+				Error:      err.Error(),
+			}
+			continue
+		}
+		dbMu.Unlock()
+
+		events <- tui.ActivityEvent{
+			Type:       tui.EventAnalysisComplete,
+			Timestamp:  time.Now(),
+			Identifier: album.IAIdentifier,
+			WorkerID:   workerID,
+			Message:    fmt.Sprintf("[%s] Enhanced %s with %d tags (%d tracks)", workerID, album.IAIdentifier, len(strings.Split(tags, ", ")), album.TrackCount),
+		}
+		metrics.RecordAnalyzerCompletion()
+	}
+}
+
 func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent,
 	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, track db.ClaimedTrack, metrics *tui.Metrics,
 	iaLimiter *ratelimit.Limiter, bwLimiter *rate.Limiter, stopCh <-chan struct{}) bool {
@@ -1015,6 +1170,34 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan s
 		}
 		return
 	}
+
+	subjectsJoined := strings.Join(album.Subjects, ", ")
+	genresJoined := strings.Join(album.Genres, ", ")
+	if err := db.UpdateAlbumMetadata(sqlDB.Conn, albumID, subjectsJoined, genresJoined); err != nil {
+		events <- tui.ActivityEvent{
+			Type:       tui.EventInfo,
+			Timestamp:  time.Now(),
+			Identifier: albumID,
+			WorkerID:   workerID,
+			Message:    fmt.Sprintf("[%s] Storing album metadata %s: %v", workerID, albumID, err),
+			Error:      err.Error(),
+		}
+	}
+
+	tags := db.GenerateTags(albumID, album.Title, album.Creator, album.Subjects, album.Genres)
+	if tags != "" {
+		if err := db.UpdateTracksTags(sqlDB.Conn, albumID, tags); err != nil {
+			events <- tui.ActivityEvent{
+				Type:       tui.EventInfo,
+				Timestamp:  time.Now(),
+				Identifier: albumID,
+				WorkerID:   workerID,
+				Message:    fmt.Sprintf("[%s] Storing track tags %s: %v", workerID, albumID, err),
+				Error:      err.Error(),
+			}
+		}
+	}
+
 	dbMu.Unlock()
 
 	events <- tui.ActivityEvent{
@@ -1108,7 +1291,7 @@ func runTextSearch(cfg *config.Config) {
 		os.Exit(1)
 	}
 
-	results, err := db.SearchByText(sqlDB.Conn, textVec, 20)
+	results, err := db.SearchByText(sqlDB.Conn, textVec, cfg.SearchText, 20)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "search error: %v\n", err)
 		os.Exit(1)
@@ -1121,7 +1304,7 @@ func runTextSearch(cfg *config.Config) {
 
 	fmt.Printf("Results for %q (%d matches):\n\n", cfg.SearchText, len(results))
 	for i, r := range results {
-		fmt.Printf("  %2d. %.4f  %s — %s\n", i+1, r.Similarity, r.Title, r.AlbumTitle)
+		fmt.Printf("  %2d. %.4f (clap=%.4f pill=%.4f)  %s — %s\n", i+1, r.Similarity, r.CLAPSimilarity, r.PillScore, r.Title, r.AlbumTitle)
 	}
 }
 

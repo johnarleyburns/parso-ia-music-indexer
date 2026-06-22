@@ -87,6 +87,63 @@ type TrackDetail struct {
 	QualityScore float64
 }
 
+type UntaggedAlbum struct {
+	IAIdentifier string
+	Title        string
+	Creator      string
+	Subjects     string
+	Genres       string
+	TrackCount   int
+}
+
+func ClaimUntaggedAlbum(db *sql.DB) (*UntaggedAlbum, error) {
+	var album UntaggedAlbum
+	err := db.QueryRow(`
+		SELECT a.ia_identifier, a.title, a.creator,
+			COALESCE(a.subjects, ''), COALESCE(a.genres, ''),
+			(SELECT count(*) FROM tracks t
+			 INNER JOIN track_embeddings e ON t.id = e.track_id
+			 WHERE t.album_id = a.ia_identifier AND t.status = 'completed' AND (t.tags IS NULL OR t.tags = ''))
+		FROM albums a
+		WHERE a.status = 'resolved'
+		  AND EXISTS (
+			SELECT 1 FROM tracks t
+			INNER JOIN track_embeddings e ON t.id = e.track_id
+			WHERE t.album_id = a.ia_identifier AND t.status = 'completed' AND (t.tags IS NULL OR t.tags = '')
+		  )
+		ORDER BY a.updated_at ASC
+		LIMIT 1
+	`).Scan(&album.IAIdentifier, &album.Title, &album.Creator, &album.Subjects, &album.Genres, &album.TrackCount)
+	if err != nil {
+		if err.Error() == "sql: no rows in result set" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("claim untagged album: %w", err)
+	}
+	return &album, nil
+}
+
+func GetAlbumsWithoutMetadata(db *sql.DB, limit int) ([]string, error) {
+	rows, err := db.Query(`
+		SELECT ia_identifier FROM albums
+		WHERE status = 'resolved' AND (subjects IS NULL OR subjects = '')
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query albums without metadata: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func GetCombinedStats(db *sql.DB) (*CombinedStats, error) {
 	s := &CombinedStats{}
 
@@ -311,6 +368,23 @@ func MarkAlbumResolved(db *sql.DB, identifier, title, creator, collection, artUR
 		`UPDATE albums SET status='resolved', title=?, creator=?, collection=?, art_url=?, track_count=?, updated_at=?
 		 WHERE ia_identifier=?`,
 		title, creator, collection, artURL, trackCount, now, identifier,
+	)
+	return err
+}
+
+func UpdateAlbumMetadata(db *sql.DB, identifier, subjects, genres string) error {
+	_, err := db.Exec(
+		`UPDATE albums SET subjects=?, genres=? WHERE ia_identifier=?`,
+		subjects, genres, identifier,
+	)
+	return err
+}
+
+func UpdateTracksTags(db *sql.DB, albumID, tags string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := db.Exec(
+		`UPDATE tracks SET tags=?, updated_at=? WHERE album_id=?`,
+		tags, now, albumID,
 	)
 	return err
 }
@@ -630,8 +704,8 @@ func SearchCompletedTracks(sqlDB *sql.DB, query string, limit, offset int) ([]Tr
 			INNER JOIN track_embeddings e ON t.id = e.track_id
 			INNER JOIN albums a ON t.album_id = a.ia_identifier
 			WHERE t.status = 'completed'
-			  AND (t.title LIKE ? OR t.filename LIKE ? OR t.album_id LIKE ? OR a.title LIKE ?)`,
-			pattern, pattern, pattern, pattern).Scan(&totalCount)
+			  AND (t.title LIKE ? OR t.filename LIKE ? OR t.album_id LIKE ? OR a.title LIKE ? OR t.tags LIKE ?)`,
+			pattern, pattern, pattern, pattern, pattern).Scan(&totalCount)
 		if err != nil {
 			return nil, 0, fmt.Errorf("count: %w", err)
 		}
@@ -641,9 +715,9 @@ func SearchCompletedTracks(sqlDB *sql.DB, query string, limit, offset int) ([]Tr
 			INNER JOIN track_embeddings e ON t.id = e.track_id
 			INNER JOIN albums a ON t.album_id = a.ia_identifier
 			WHERE t.status = 'completed'
-			  AND (t.title LIKE ? OR t.filename LIKE ? OR t.album_id LIKE ? OR a.title LIKE ?)
+			  AND (t.title LIKE ? OR t.filename LIKE ? OR t.album_id LIKE ? OR a.title LIKE ? OR t.tags LIKE ?)
 			ORDER BY t.updated_at DESC
-			LIMIT ? OFFSET ?`, pattern, pattern, pattern, pattern, limit, offset)
+			LIMIT ? OFFSET ?`, pattern, pattern, pattern, pattern, pattern, limit, offset)
 	}
 	if err != nil {
 		return nil, 0, fmt.Errorf("query: %w", err)

@@ -76,6 +76,8 @@ func (db *DB) migrate() error {
 			downloads     INTEGER NOT NULL DEFAULT 0,
 			retry_count   INTEGER NOT NULL DEFAULT 0,
 			prechecked    INTEGER NOT NULL DEFAULT 0,
+			subjects      TEXT,
+			genres        TEXT,
 			created_at    TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
@@ -106,6 +108,7 @@ func (db *DB) migrate() error {
 			locked_at     TEXT,
 			retry_count   INTEGER NOT NULL DEFAULT 0,
 			error_message TEXT,
+			tags          TEXT,
 			created_at    TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
 			UNIQUE(album_id, filename)
@@ -170,6 +173,24 @@ func (db *DB) migrateSchemaChanges() error {
 			SELECT DISTINCT t.album_id FROM tracks t WHERE t.status = 'completed'
 		)`); err != nil {
 			return fmt.Errorf("backfill prechecked: %w", err)
+		}
+	}
+
+	if tableExists(db.Conn, "albums") && !columnExists(db.Conn, "albums", "subjects") {
+		if _, err := db.Conn.Exec("ALTER TABLE albums ADD COLUMN subjects TEXT"); err != nil {
+			return fmt.Errorf("add subjects column: %w", err)
+		}
+	}
+
+	if tableExists(db.Conn, "albums") && !columnExists(db.Conn, "albums", "genres") {
+		if _, err := db.Conn.Exec("ALTER TABLE albums ADD COLUMN genres TEXT"); err != nil {
+			return fmt.Errorf("add genres column: %w", err)
+		}
+	}
+
+	if tableExists(db.Conn, "tracks") && !columnExists(db.Conn, "tracks", "tags") {
+		if _, err := db.Conn.Exec("ALTER TABLE tracks ADD COLUMN tags TEXT"); err != nil {
+			return fmt.Errorf("add tags column: %w", err)
 		}
 	}
 
@@ -269,14 +290,16 @@ func recreateAlbumsWithUnavailable(sqlDB *sql.DB) error {
 			downloads     INTEGER NOT NULL DEFAULT 0,
 			retry_count   INTEGER NOT NULL DEFAULT 0,
 			prechecked    INTEGER NOT NULL DEFAULT 0,
+			subjects      TEXT,
+			genres        TEXT,
 			created_at    TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 		)`)
 	if err != nil {
 		return fmt.Errorf("create albums_new: %w", err)
 	}
-	_, err = sqlDB.Exec(`INSERT INTO albums_new(ia_identifier, title, creator, collection, art_url, track_count, status, error_message, downloads, retry_count, prechecked, created_at, updated_at)
-		SELECT ia_identifier, title, creator, collection, art_url, track_count, status, error_message, downloads, retry_count, prechecked, created_at, updated_at FROM albums`)
+	_, err = sqlDB.Exec(`INSERT INTO albums_new(ia_identifier, title, creator, collection, art_url, track_count, status, error_message, downloads, retry_count, prechecked, subjects, genres, created_at, updated_at)
+		SELECT ia_identifier, title, creator, collection, art_url, track_count, status, error_message, downloads, retry_count, prechecked, subjects, genres, created_at, updated_at FROM albums`)
 	if err != nil {
 		return fmt.Errorf("copy albums: %w", err)
 	}
@@ -313,6 +336,7 @@ func recreateTracksWithUnavailable(sqlDB *sql.DB) error {
 			locked_at     TEXT,
 			retry_count   INTEGER NOT NULL DEFAULT 0,
 			error_message TEXT,
+			tags          TEXT,
 			created_at    TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
 			UNIQUE(album_id, filename)
@@ -320,8 +344,8 @@ func recreateTracksWithUnavailable(sqlDB *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("create tracks_new: %w", err)
 	}
-	_, err = sqlDB.Exec(`INSERT INTO tracks_new(id, album_id, filename, title, track_number, format, bitrate, duration, download_url, status, worker_id, locked_at, retry_count, error_message, created_at, updated_at)
-		SELECT id, album_id, filename, title, track_number, format, bitrate, duration, download_url, status, worker_id, locked_at, retry_count, error_message, created_at, updated_at FROM tracks`)
+	_, err = sqlDB.Exec(`INSERT INTO tracks_new(id, album_id, filename, title, track_number, format, bitrate, duration, download_url, status, worker_id, locked_at, retry_count, error_message, tags, created_at, updated_at)
+		SELECT id, album_id, filename, title, track_number, format, bitrate, duration, download_url, status, worker_id, locked_at, retry_count, error_message, tags, created_at, updated_at FROM tracks`)
 	if err != nil {
 		return fmt.Errorf("copy tracks: %w", err)
 	}

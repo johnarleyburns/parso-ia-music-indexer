@@ -108,19 +108,24 @@ func GetEmbedding(db *sql.DB, trackID int) (clap, mfcc, chroma []float32, qualit
 }
 
 type TextSearchResult struct {
-	TrackID      int
-	Title        string
-	AlbumID      string
-	AlbumTitle   string
-	QualityScore float64
-	Similarity   float64
+	TrackID        int
+	Title          string
+	AlbumID        string
+	AlbumTitle     string
+	AlbumCreator   string
+	TrackTags      string
+	QualityScore   float64
+	CLAPSimilarity float64
+	PillScore      float64
+	Similarity     float64
 }
 
-func SearchByText(db *sql.DB, queryVec []float32, limit int) ([]TextSearchResult, error) {
+func SearchByText(db *sql.DB, queryVec []float32, queryText string, limit int) ([]TextSearchResult, error) {
 	qv := l2Normalize(queryVec)
 
 	rows, err := db.Query(`SELECT e.track_id, COALESCE(t.title, t.filename), t.album_id,
-			COALESCE(a.title, a.ia_identifier), e.clap, e.quality_score
+			COALESCE(a.title, a.ia_identifier), COALESCE(a.creator, ''),
+			COALESCE(t.tags, ''), e.clap, e.quality_score
 		FROM track_embeddings e
 		INNER JOIN tracks t ON e.track_id = t.id
 		INNER JOIN albums a ON t.album_id = a.ia_identifier
@@ -134,11 +139,13 @@ func SearchByText(db *sql.DB, queryVec []float32, limit int) ([]TextSearchResult
 	for rows.Next() {
 		var r TextSearchResult
 		var clapBlob []byte
-		if err := rows.Scan(&r.TrackID, &r.Title, &r.AlbumID, &r.AlbumTitle, &clapBlob, &r.QualityScore); err != nil {
+		if err := rows.Scan(&r.TrackID, &r.Title, &r.AlbumID, &r.AlbumTitle, &r.AlbumCreator, &r.TrackTags, &clapBlob, &r.QualityScore); err != nil {
 			return nil, err
 		}
 		clapVec := decodeF16(clapBlob)
-		r.Similarity = dotProduct(qv, clapVec)
+		r.CLAPSimilarity = dotProduct(qv, clapVec)
+		r.PillScore = ComputePillScore(queryText, r.Title, r.TrackTags, r.AlbumTitle, r.AlbumCreator)
+		r.Similarity = 0.50*r.CLAPSimilarity + 0.50*r.PillScore
 		results = append(results, r)
 	}
 	if err := rows.Err(); err != nil {

@@ -227,6 +227,12 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "C":
 			m.Controls <- ControlCmd{Action: CmdRemoveCleaner}
 			return m, nil
+		case "e":
+			m.Controls <- ControlCmd{Action: CmdAddEnhancer}
+			return m, nil
+		case "E":
+			m.Controls <- ControlCmd{Action: CmdRemoveEnhancer}
+			return m, nil
 		case "F":
 				m.Controls <- ControlCmd{Action: CmdResetFailed}
 				return m, nil

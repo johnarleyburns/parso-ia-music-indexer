@@ -1093,7 +1093,7 @@ func TestSearchByText(t *testing.T) {
 	queryVec := make([]float32, 512)
 	queryVec[0] = 1.0
 
-	results, err := SearchByText(db.Conn, queryVec, 10)
+	results, err := SearchByText(db.Conn, queryVec, "target", 10)
 	if err != nil {
 		t.Fatalf("SearchByText: %v", err)
 	}
@@ -1112,11 +1112,219 @@ func TestSearchByTextEmpty(t *testing.T) {
 	db := testDB(t)
 	queryVec := make([]float32, 512)
 	queryVec[0] = 1.0
-	results, err := SearchByText(db.Conn, queryVec, 10)
+	results, err := SearchByText(db.Conn, queryVec, "", 10)
 	if err != nil {
 		t.Fatalf("SearchByText empty: %v", err)
 	}
 	if len(results) != 0 {
 		t.Errorf("expected 0 results, got %d", len(results))
+	}
+}
+
+func TestSearchCompletedTracksWithTags(t *testing.T) {
+	db := testDB(t)
+
+	BulkInsertAlbums(db.Conn, testAlbumInserts("piano-album"))
+	MarkAlbumResolved(db.Conn, "piano-album", "Piano Works", "Beethoven", "", "", 0)
+	db.Conn.Exec(`UPDATE albums SET prechecked = 1 WHERE ia_identifier = 'piano-album'`)
+	InsertTracks(db.Conn, "piano-album", []TrackInsert{
+		{Filename: "track1.mp3", Title: "Allegro", Format: "VBR MP3", DownloadURL: "https://example.com/allegro"},
+	})
+	claimed, _ := ClaimNextTrackBatch(db.Conn, "test", 1)
+	if len(claimed) == 0 {
+		t.Fatal("no tracks claimed")
+	}
+	MarkTrackCompleted(db.Conn, claimed[0].ID)
+	clap := make([]float32, 512)
+	mfcc := make([]float32, 40)
+	chroma := make([]float32, 12)
+	SaveEmbedding(db.Conn, claimed[0].ID, clap, mfcc, chroma, 0.8)
+
+	db.Conn.Exec(`UPDATE tracks SET tags = 'piano, classical, beethoven' WHERE id = ?`, claimed[0].ID)
+
+	tracks, total, err := SearchCompletedTracks(db.Conn, "piano", 50, 0)
+	if err != nil {
+		t.Fatalf("SearchCompletedTracks with tags: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("expected 1 result for 'piano' tag search, got %d", total)
+	}
+	if len(tracks) != 1 {
+		t.Fatalf("expected 1 track, got %d", len(tracks))
+	}
+
+	tracks, total, err = SearchCompletedTracks(db.Conn, "classical", 50, 0)
+	if err != nil {
+		t.Fatalf("SearchCompletedTracks with tags: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("expected 1 result for 'classical' tag search, got %d", total)
+	}
+
+	tracks, total, err = SearchCompletedTracks(db.Conn, "beethoven", 50, 0)
+	if err != nil {
+		t.Fatalf("SearchCompletedTracks with tags: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("expected 1 result for 'beethoven' tag search, got %d", total)
+	}
+
+	tracks, _, err = SearchCompletedTracks(db.Conn, "nonexistent", 50, 0)
+	if err != nil {
+		t.Fatalf("SearchCompletedTracks with tags: %v", err)
+	}
+	if len(tracks) != 0 {
+		t.Errorf("expected 0 results for nonexistent tag, got %d", len(tracks))
+	}
+}
+
+func TestSearchByTextWithPillScore(t *testing.T) {
+	db := testDB(t)
+
+	clap1 := make([]float32, 512)
+	clap1[0] = 1.0
+	clap2 := make([]float32, 512)
+	clap2[1] = 1.0
+	mfcc := makeTestMfcc(0)
+	chroma := makeTestChroma(0)
+
+	setupTrackWithEmbedding(t, db, "album-piano", "t1.mp3", "Track One", 1, clap1, mfcc, chroma, 0.9)
+	setupTrackWithEmbedding(t, db, "album-guitar", "t2.mp3", "Track Two", 1, clap2, mfcc, chroma, 0.8)
+
+	db.Conn.Exec(`UPDATE tracks SET tags = 'piano, classical, beethoven' WHERE album_id = 'album-piano'`)
+	db.Conn.Exec(`UPDATE tracks SET tags = 'guitar, rock, jazz' WHERE album_id = 'album-guitar'`)
+
+	queryVec := make([]float32, 512)
+	queryVec[0] = 1.0
+
+	results, err := SearchByText(db.Conn, queryVec, "piano", 10)
+	if err != nil {
+		t.Fatalf("SearchByText with pill: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	if results[0].PillScore <= 0 && results[1].PillScore > 0 {
+		t.Errorf("expected first result to have positive pill score for 'piano' query")
+	}
+}
+
+func TestUpdateAlbumMetadataAndTags(t *testing.T) {
+	db := testDB(t)
+
+	BulkInsertAlbums(db.Conn, testAlbumInserts("test-album"))
+	MarkAlbumResolved(db.Conn, "test-album", "Test Album", "Test Artist", "", "", 0)
+
+	err := UpdateAlbumMetadata(db.Conn, "test-album", "subject1, subject2", "genre1, genre2")
+	if err != nil {
+		t.Fatalf("UpdateAlbumMetadata: %v", err)
+	}
+
+	var subjects, genres string
+	db.Conn.QueryRow(`SELECT subjects, genres FROM albums WHERE ia_identifier = 'test-album'`).Scan(&subjects, &genres)
+	if subjects != "subject1, subject2" {
+		t.Errorf("expected 'subject1, subject2', got %q", subjects)
+	}
+	if genres != "genre1, genre2" {
+		t.Errorf("expected 'genre1, genre2', got %q", genres)
+	}
+
+	db.Conn.Exec(`UPDATE albums SET prechecked = 1 WHERE ia_identifier = 'test-album'`)
+	InsertTracks(db.Conn, "test-album", []TrackInsert{
+		{Filename: "song.mp3", Title: "Song", Format: "VBR MP3", DownloadURL: "https://example.com/song"},
+	})
+	claimed, _ := ClaimNextTrackBatch(db.Conn, "test", 1)
+	if len(claimed) == 0 {
+		t.Fatal("no tracks claimed")
+	}
+	MarkTrackCompleted(db.Conn, claimed[0].ID)
+	clap := make([]float32, 512)
+	mfcc := make([]float32, 40)
+	chroma := make([]float32, 12)
+	SaveEmbedding(db.Conn, claimed[0].ID, clap, mfcc, chroma, 0.8)
+
+	err = UpdateTracksTags(db.Conn, "test-album", "piano, classical")
+	if err != nil {
+		t.Fatalf("UpdateTracksTags: %v", err)
+	}
+
+	var tags string
+	db.Conn.QueryRow(`SELECT tags FROM tracks WHERE album_id = 'test-album'`).Scan(&tags)
+	if tags != "piano, classical" {
+		t.Errorf("expected 'piano, classical', got %q", tags)
+	}
+}
+
+func TestColumnMigration(t *testing.T) {
+	db := testDB(t)
+
+	BulkInsertAlbums(db.Conn, testAlbumInserts("migrate-test"))
+	MarkAlbumResolved(db.Conn, "migrate-test", "Migration Test", "", "", "", 0)
+
+	var subjects, genres sql.NullString
+	err := db.Conn.QueryRow(`SELECT subjects, genres FROM albums WHERE ia_identifier = 'migrate-test'`).Scan(&subjects, &genres)
+	if err != nil {
+		t.Fatalf("subjects/genres columns missing: %v", err)
+	}
+	if !subjects.Valid {
+		t.Log("subjects is NULL (expected for fresh insert)")
+	}
+
+	db.Conn.Exec(`UPDATE albums SET prechecked = 1 WHERE ia_identifier = 'migrate-test'`)
+	InsertTracks(db.Conn, "migrate-test", []TrackInsert{
+		{Filename: "track.mp3", Title: "Track", Format: "VBR MP3", DownloadURL: "https://example.com/track"},
+	})
+	claimed, _ := ClaimNextTrackBatch(db.Conn, "test", 1)
+	if len(claimed) > 0 {
+		MarkTrackCompleted(db.Conn, claimed[0].ID)
+	}
+
+	var tags sql.NullString
+	err = db.Conn.QueryRow(`SELECT tags FROM tracks WHERE album_id = 'migrate-test'`).Scan(&tags)
+	if err != nil {
+		t.Fatalf("tags column missing: %v", err)
+	}
+}
+
+func TestClaimUntaggedAlbum(t *testing.T) {
+	db := testDB(t)
+
+	BulkInsertAlbums(db.Conn, testAlbumInserts("untagged-1"))
+	MarkAlbumResolved(db.Conn, "untagged-1", "Untagged Album", "", "", "", 0)
+	db.Conn.Exec(`UPDATE albums SET prechecked = 1 WHERE ia_identifier = 'untagged-1'`)
+	InsertTracks(db.Conn, "untagged-1", []TrackInsert{
+		{Filename: "u1.mp3", Title: "U1", Format: "VBR MP3", DownloadURL: "https://example.com/u1"},
+	})
+	claimed, _ := ClaimNextTrackBatch(db.Conn, "test", 1)
+	if len(claimed) > 0 {
+		MarkTrackCompleted(db.Conn, claimed[0].ID)
+		clap := make([]float32, 512)
+		mfcc := make([]float32, 40)
+		chroma := make([]float32, 12)
+		SaveEmbedding(db.Conn, claimed[0].ID, clap, mfcc, chroma, 0.5)
+	}
+
+	album, err := ClaimUntaggedAlbum(db.Conn)
+	if err != nil {
+		t.Fatalf("ClaimUntaggedAlbum: %v", err)
+	}
+	if album == nil {
+		t.Fatal("expected to claim an untagged album")
+	}
+	if album.IAIdentifier != "untagged-1" {
+		t.Errorf("expected 'untagged-1', got %q", album.IAIdentifier)
+	}
+	if album.TrackCount != 1 {
+		t.Errorf("expected 1 untagged track, got %d", album.TrackCount)
+	}
+
+	db.Conn.Exec(`UPDATE tracks SET tags = 'test' WHERE album_id = 'untagged-1'`)
+	album, err = ClaimUntaggedAlbum(db.Conn)
+	if err != nil {
+		t.Fatalf("ClaimUntaggedAlbum after tagging: %v", err)
+	}
+	if album != nil {
+		t.Error("expected no untagged albums after tagging")
 	}
 }
