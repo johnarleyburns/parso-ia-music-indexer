@@ -534,7 +534,7 @@ func cleanupWorkerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-c
 
 		dbMu.Lock()
 		if meta.AccessRestrictedItem {
-			skipped, ferr := db.FailAlbumAndPendingTracksByID(sqlDB.Conn, album.IAIdentifier, "access-restricted item (detected by cleanup)")
+			skipped, ferr := db.FailAlbumAndPendingTracksUnavailable(sqlDB.Conn, album.IAIdentifier, "access-restricted item (detected by cleanup)")
 			dbMu.Unlock()
 			if ferr != nil {
 				events <- tui.ActivityEvent{
@@ -547,11 +547,11 @@ func cleanupWorkerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-c
 				}
 			} else {
 				events <- tui.ActivityEvent{
-					Type:       tui.EventAlbumFailed,
+					Type:       tui.EventAlbumUnavailable,
 					Timestamp:  time.Now(),
 					Identifier: album.IAIdentifier,
 					WorkerID:   workerID,
-					Message:    fmt.Sprintf("[%s] Restricted album %s (%s), %d pending tracks failed", workerID, album.Title, album.IAIdentifier, skipped),
+					Message:    fmt.Sprintf("[%s] Restricted album %s (%s), %d pending tracks unavailable", workerID, album.Title, album.IAIdentifier, skipped),
 				}
 			}
 		} else {
@@ -736,14 +736,15 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 		dbMu.Lock()
 		if strings.Contains(err.Error(), "unexpected status 401") || strings.Contains(err.Error(), "unexpected status 403") {
 			reason := fmt.Sprintf("access-restricted: %v", err)
-			skipped, _ := db.FailAlbumAndPendingTracks(sqlDB.Conn, track.ID, track.AlbumID, reason)
+			skipped, _ := db.FailAlbumAndPendingTracksUnavailable(sqlDB.Conn, track.AlbumID, reason)
+			db.MarkTrackUnavailable(sqlDB.Conn, track.ID, reason)
 			dbMu.Unlock()
 			events <- tui.ActivityEvent{
-				Type:       tui.EventAnalysisFailed,
+				Type:       tui.EventAlbumUnavailable,
 				Timestamp:  time.Now(),
 				Identifier: track.AlbumID,
 				WorkerID:   workerID,
-				Message:    fmt.Sprintf("[%s] Album access-restricted %s: %v (%d pending tracks failed)", workerID, track.AlbumID, err, skipped),
+				Message:    fmt.Sprintf("[%s] Album access-restricted %s: %v (%d pending tracks unavailable)", workerID, track.AlbumID, err, skipped),
 				Error:      err.Error(),
 			}
 		} else {
@@ -768,7 +769,7 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 		skipped, _ := db.FlagAlbumPoorQuality(sqlDB.Conn, track.ID, track.AlbumID, reason)
 		dbMu.Unlock()
 		events <- tui.ActivityEvent{
-			Type:       tui.EventAnalysisFailed,
+			Type:       tui.EventAnalysisUnavailable,
 			Timestamp:  time.Now(),
 			Identifier: trackLabel,
 			WorkerID:   workerID,
@@ -777,7 +778,7 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 		}
 		if skipped > 0 {
 			events <- tui.ActivityEvent{
-				Type:       tui.EventAlbumFailed,
+				Type:       tui.EventAlbumUnavailable,
 				Timestamp:  time.Now(),
 				Identifier: track.AlbumID,
 				WorkerID:   workerID,
@@ -794,10 +795,10 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 
 	if compositeScore < audio.QualityUnusable {
 		dbMu.Lock()
-		db.MarkTrackFailed(sqlDB.Conn, track.ID, fmt.Sprintf("low quality: score=%.3f snr=%.1f centroid=%.0f crest=%.1f", compositeScore, snrDB, centroidHz, crestFactor))
+		db.MarkTrackUnavailable(sqlDB.Conn, track.ID, fmt.Sprintf("low quality: score=%.3f snr=%.1f centroid=%.0f crest=%.1f", compositeScore, snrDB, centroidHz, crestFactor))
 		dbMu.Unlock()
 		events <- tui.ActivityEvent{
-			Type:         tui.EventAnalysisFailed,
+			Type:         tui.EventAnalysisUnavailable,
 			Timestamp:    time.Now(),
 			Identifier:   trackLabel,
 			WorkerID:     workerID,
@@ -908,15 +909,15 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan s
 				return
 			}
 		} else {
-			db.MarkAlbumFailed(sqlDB.Conn, albumID, errMsg)
+			db.MarkAlbumUnavailable(sqlDB.Conn, albumID, errMsg)
 			dbMu.Unlock()
 		}
 		events <- tui.ActivityEvent{
-			Type:       tui.EventAlbumFailed,
+			Type:       tui.EventAlbumUnavailable,
 			Timestamp:  time.Now(),
 			Identifier: albumID,
 			WorkerID:   workerID,
-			Message:    fmt.Sprintf("[%s] Album failed %s: %v", workerID, albumID, err),
+			Message:    fmt.Sprintf("[%s] Album unavailable %s: %v", workerID, albumID, err),
 			Error:      err.Error(),
 		}
 		return
@@ -924,10 +925,10 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan s
 
 	if len(album.Tracks) == 0 {
 		dbMu.Lock()
-		db.MarkAlbumFailed(sqlDB.Conn, albumID, "no acceptable MP3 tracks found")
+		db.MarkAlbumUnavailable(sqlDB.Conn, albumID, "no acceptable MP3 tracks found")
 		dbMu.Unlock()
 		events <- tui.ActivityEvent{
-			Type:       tui.EventAlbumFailed,
+			Type:       tui.EventAlbumUnavailable,
 			Timestamp:  time.Now(),
 			Identifier: albumID,
 			WorkerID:   workerID,
@@ -1174,18 +1175,20 @@ func runHeadless(cfg *config.Config) {
 		"db_path": cfg.DBPath,
 		"collections": collStatsMap,
 		"albums": map[string]int{
-			"total":     stats.Albums.Total,
-			"pending":   stats.Albums.Pending,
-			"resolving": stats.Albums.Resolving,
-			"resolved":  stats.Albums.Resolved,
-			"failed":    stats.Albums.Failed,
+			"total":       stats.Albums.Total,
+			"pending":     stats.Albums.Pending,
+			"resolving":   stats.Albums.Resolving,
+			"resolved":    stats.Albums.Resolved,
+			"failed":      stats.Albums.Failed,
+			"unavailable": stats.Albums.Unavailable,
 		},
 		"tracks": map[string]int{
-			"total":      stats.Tracks.Total,
-			"pending":    stats.Tracks.Pending,
-			"processing": stats.Tracks.Processing,
-			"completed":  stats.Tracks.Completed,
-			"failed":     stats.Tracks.Failed,
+			"total":       stats.Tracks.Total,
+			"pending":     stats.Tracks.Pending,
+			"processing":  stats.Tracks.Processing,
+			"completed":   stats.Tracks.Completed,
+			"failed":      stats.Tracks.Failed,
+			"unavailable": stats.Tracks.Unavailable,
 		},
 		"embeddings": map[string]int{
 			"count": embedCount,

@@ -187,6 +187,17 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 					ws.CurrentTask = ""
 				}
 			}
+		case EventAlbumUnavailable:
+			if msg.WorkerID != "" {
+				if ws, ok := m.ResolverStates[msg.WorkerID]; ok {
+					ws.FailedCount++
+					ws.CurrentTask = ""
+				}
+				if ws, ok := m.CleanerStates[msg.WorkerID]; ok {
+					ws.FailedCount++
+					ws.CurrentTask = ""
+				}
+			}
 		case EventAlbumPrechecked:
 			if msg.WorkerID != "" {
 				if ws, ok := m.CleanerStates[msg.WorkerID]; ok {
@@ -208,6 +219,13 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 				}
 			}
 		case EventAnalysisFailed:
+			if msg.WorkerID != "" {
+				if ws, ok := m.AnalyzerStates[msg.WorkerID]; ok {
+					ws.FailedCount++
+					ws.CurrentTask = ""
+				}
+			}
+		case EventAnalysisUnavailable:
 			if msg.WorkerID != "" {
 				if ws, ok := m.AnalyzerStates[msg.WorkerID]; ok {
 					ws.FailedCount++
@@ -242,6 +260,7 @@ func (m DashboardModel) View() tea.View {
 	pendingStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#06b6d4")).Bold(true)
 	completeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
 	failedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
+	unavailableStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
 	processingStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#eab308"))
 	resolvingStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#a78bfa"))
 
@@ -275,14 +294,16 @@ func (m DashboardModel) View() tea.View {
 	albumContent += drawRow("Pending:   ", fmt.Sprintf("%d", stats.Albums.Pending), pendingStyle) + "\n"
 	albumContent += drawRow("Resolving: ", fmt.Sprintf("%d", stats.Albums.Resolving), resolvingStyle) + "\n"
 	albumContent += drawRow("Resolved:  ", fmt.Sprintf("%d", stats.Albums.Resolved), completeStyle) + "\n"
-	albumContent += drawRow("Failed:    ", fmt.Sprintf("%d", stats.Albums.Failed), failedStyle)
+	albumContent += drawRow("Failed:    ", fmt.Sprintf("%d", stats.Albums.Failed), failedStyle) + "\n"
+	albumContent += drawRow("Unavail:   ", fmt.Sprintf("%d", stats.Albums.Unavailable), unavailableStyle)
 
 	trackContent := lipgloss.NewStyle().Bold(true).Foreground(Secondary).Render("Tracks") + "\n\n"
 	trackContent += drawRow("Total:      ", fmt.Sprintf("%d", stats.Tracks.Total), valueStyle) + "\n"
 	trackContent += drawRow("Pending:    ", fmt.Sprintf("%d", stats.Tracks.Pending), pendingStyle) + "\n"
 	trackContent += drawRow("Processing: ", fmt.Sprintf("%d", stats.Tracks.Processing), processingStyle) + "\n"
 	trackContent += drawRow("Completed:  ", fmt.Sprintf("%d", stats.Tracks.Completed), completeStyle) + "\n"
-	trackContent += drawRow("Failed:     ", fmt.Sprintf("%d", stats.Tracks.Failed), failedStyle)
+	trackContent += drawRow("Failed:     ", fmt.Sprintf("%d", stats.Tracks.Failed), failedStyle) + "\n"
+	trackContent += drawRow("Unavail:    ", fmt.Sprintf("%d", stats.Tracks.Unavailable), unavailableStyle)
 
 	statsRow := lipgloss.JoinHorizontal(lipgloss.Top,
 		statsPanel.Render(albumContent),

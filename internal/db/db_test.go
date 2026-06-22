@@ -255,6 +255,273 @@ func TestMarkTrackFailed(t *testing.T) {
 	}
 }
 
+func TestMarkTrackUnavailable(t *testing.T) {
+	db := testDB(t)
+	BulkInsertAlbums(db.Conn, testAlbumInserts("album-a"))
+	MarkAlbumResolved(db.Conn, "album-a", "", "", "", "", 0)
+	db.Conn.Exec(`UPDATE albums SET prechecked = 1 WHERE ia_identifier = 'album-a'`)
+	InsertTracks(db.Conn, "album-a", []TrackInsert{
+		{Filename: "song.mp3", Title: "Song", TrackNumber: 1, Format: "VBR MP3", DownloadURL: "https://example.com/song.mp3"},
+	})
+
+	claimed, _ := ClaimNextTrackBatch(db.Conn, "w1", 1)
+	if err := MarkTrackUnavailable(db.Conn, claimed[0].ID, "permanent issue"); err != nil {
+		t.Fatalf("MarkTrackUnavailable: %v", err)
+	}
+
+	stats, _ := GetCombinedStats(db.Conn)
+	if stats.Tracks.Unavailable != 1 {
+		t.Errorf("expected 1 unavailable, got %+v", stats.Tracks)
+	}
+	if stats.Tracks.Failed != 0 {
+		t.Errorf("expected 0 failed, got %+v", stats.Tracks)
+	}
+}
+
+func TestMarkAlbumUnavailable(t *testing.T) {
+	db := testDB(t)
+	BulkInsertAlbums(db.Conn, testAlbumInserts("album-a"))
+	ClaimUnresolvedAlbum(db.Conn, "w1")
+
+	err := MarkAlbumUnavailable(db.Conn, "album-a", "no acceptable MP3 tracks")
+	if err != nil {
+		t.Fatalf("MarkAlbumUnavailable: %v", err)
+	}
+
+	stats, _ := GetCombinedStats(db.Conn)
+	if stats.Albums.Unavailable != 1 {
+		t.Errorf("expected 1 unavailable album, got %+v", stats.Albums)
+	}
+	if stats.Albums.Failed != 0 {
+		t.Errorf("expected 0 failed albums, got %+v", stats.Albums)
+	}
+}
+
+func TestFailAlbumAndPendingTracksUnavailable(t *testing.T) {
+	db := testDB(t)
+	BulkInsertAlbums(db.Conn, testAlbumInserts("album-a"))
+	MarkAlbumResolved(db.Conn, "album-a", "", "", "", "", 0)
+	InsertTracks(db.Conn, "album-a", []TrackInsert{
+		{Filename: "a.mp3", Title: "A", TrackNumber: 1, Format: "VBR MP3", DownloadURL: "https://example.com/a.mp3"},
+		{Filename: "b.mp3", Title: "B", TrackNumber: 2, Format: "VBR MP3", DownloadURL: "https://example.com/b.mp3"},
+	})
+
+	skipped, err := FailAlbumAndPendingTracksUnavailable(db.Conn, "album-a", "access-restricted")
+	if err != nil {
+		t.Fatalf("FailAlbumAndPendingTracksUnavailable: %v", err)
+	}
+	if skipped != 2 {
+		t.Errorf("expected 2 skipped pending tracks, got %d", skipped)
+	}
+
+	stats, _ := GetCombinedStats(db.Conn)
+	if stats.Albums.Unavailable != 1 {
+		t.Errorf("expected 1 unavailable album, got %+v", stats.Albums)
+	}
+	if stats.Tracks.Unavailable != 2 {
+		t.Errorf("expected 2 unavailable tracks, got %+v", stats.Tracks)
+	}
+}
+
+func TestFlagAlbumPoorQualityMarksAsUnavailable(t *testing.T) {
+	db := testDB(t)
+	BulkInsertAlbums(db.Conn, testAlbumInserts("album-a"))
+	MarkAlbumResolved(db.Conn, "album-a", "", "", "", "", 0)
+	db.Conn.Exec(`UPDATE albums SET prechecked = 1 WHERE ia_identifier = 'album-a'`)
+	InsertTracks(db.Conn, "album-a", []TrackInsert{
+		{Filename: "good.mp3", Title: "Good", TrackNumber: 1, Format: "VBR MP3", DownloadURL: "https://example.com/good.mp3"},
+		{Filename: "bad.mp3", Title: "Bad", TrackNumber: 2, Format: "VBR MP3", DownloadURL: "https://example.com/bad.mp3"},
+	})
+
+	claimed, _ := ClaimNextTrackBatch(db.Conn, "w1", 1)
+	skipped, err := FlagAlbumPoorQuality(db.Conn, claimed[0].ID, "album-a", "decode failure")
+	if err != nil {
+		t.Fatalf("FlagAlbumPoorQuality: %v", err)
+	}
+	if skipped != 1 {
+		t.Errorf("expected 1 skipped pending track, got %d", skipped)
+	}
+
+	stats, _ := GetCombinedStats(db.Conn)
+	if stats.Albums.Unavailable != 1 {
+		t.Errorf("expected 1 unavailable album, got %+v", stats.Albums)
+	}
+	if stats.Albums.Failed != 0 {
+		t.Errorf("expected 0 failed albums, got %+v", stats.Albums)
+	}
+	if stats.Tracks.Unavailable != 2 {
+		t.Errorf("expected 2 unavailable tracks (specific + pending), got %+v", stats.Tracks)
+	}
+	if stats.Tracks.Failed != 0 {
+		t.Errorf("expected 0 failed tracks, got %+v", stats.Tracks)
+	}
+}
+
+func TestResetAllFailedDoesNotResetUnavailable(t *testing.T) {
+	db := testDB(t)
+	BulkInsertAlbums(db.Conn, testAlbumInserts("album-fail", "album-unavail"))
+	MarkAlbumResolved(db.Conn, "album-fail", "", "", "", "", 0)
+	MarkAlbumResolved(db.Conn, "album-unavail", "", "", "", "", 0)
+	db.Conn.Exec(`UPDATE albums SET prechecked = 1 WHERE ia_identifier IN ('album-fail', 'album-unavail')`)
+	InsertTracks(db.Conn, "album-fail", []TrackInsert{
+		{Filename: "fail.mp3", Title: "Fail", TrackNumber: 1, Format: "VBR MP3", DownloadURL: "https://example.com/fail.mp3"},
+	})
+	InsertTracks(db.Conn, "album-unavail", []TrackInsert{
+		{Filename: "unavail.mp3", Title: "Unavail", TrackNumber: 1, Format: "VBR MP3", DownloadURL: "https://example.com/unavail.mp3"},
+	})
+
+	claimed1, _ := ClaimNextTrackBatch(db.Conn, "w1", 1)
+	claimed2, _ := ClaimNextTrackBatch(db.Conn, "w2", 1)
+	MarkTrackFailed(db.Conn, claimed1[0].ID, "stream error")
+	MarkTrackUnavailable(db.Conn, claimed2[0].ID, "low quality")
+	MarkAlbumFailed(db.Conn, "album-fail", "stream error")
+	MarkAlbumUnavailable(db.Conn, "album-unavail", "no acceptable MP3s")
+
+	albumCount, trackCount, err := ResetAllFailed(db.Conn)
+	if err != nil {
+		t.Fatalf("ResetAllFailed: %v", err)
+	}
+	if albumCount != 1 {
+		t.Errorf("expected 1 album reset, got %d", albumCount)
+	}
+	if trackCount != 1 {
+		t.Errorf("expected 1 track reset, got %d", trackCount)
+	}
+
+	stats, _ := GetCombinedStats(db.Conn)
+	if stats.Albums.Pending != 1 || stats.Albums.Unavailable != 1 {
+		t.Errorf("expected 1 pending + 1 unavailable album, got %+v", stats.Albums)
+	}
+	if stats.Tracks.Pending != 1 || stats.Tracks.Unavailable != 1 {
+		t.Errorf("expected 1 pending + 1 unavailable track, got %+v", stats.Tracks)
+	}
+}
+
+func TestGetCombinedStatsUnavailable(t *testing.T) {
+	db := testDB(t)
+	BulkInsertAlbums(db.Conn, testAlbumInserts("album-a", "album-b"))
+	ClaimUnresolvedAlbum(db.Conn, "w1")
+	MarkAlbumUnavailable(db.Conn, "album-a", "no MP3s")
+	MarkAlbumResolved(db.Conn, "album-b", "Album B", "", "", "", 0)
+	db.Conn.Exec(`UPDATE albums SET prechecked = 1 WHERE ia_identifier = 'album-b'`)
+	InsertTracks(db.Conn, "album-b", []TrackInsert{
+		{Filename: "a.mp3", Title: "A", TrackNumber: 1, Format: "VBR MP3", DownloadURL: "https://example.com/a.mp3"},
+		{Filename: "b.mp3", Title: "B", TrackNumber: 2, Format: "VBR MP3", DownloadURL: "https://example.com/b.mp3"},
+	})
+	claimed, _ := ClaimNextTrackBatch(db.Conn, "w1", 2)
+	MarkTrackUnavailable(db.Conn, claimed[0].ID, "poor quality")
+	MarkTrackCompleted(db.Conn, claimed[1].ID)
+
+	stats, err := GetCombinedStats(db.Conn)
+	if err != nil {
+		t.Fatalf("GetCombinedStats: %v", err)
+	}
+	if stats.Albums.Unavailable != 1 || stats.Albums.Total != 2 {
+		t.Errorf("albums: expected 1 unavailable, 2 total, got %+v", stats.Albums)
+	}
+	if stats.Tracks.Unavailable != 1 || stats.Tracks.Completed != 1 || stats.Tracks.Total != 2 {
+		t.Errorf("tracks: expected 1 unavailable, 1 completed, 2 total, got %+v", stats.Tracks)
+	}
+}
+
+func TestCheckConstraintMigration(t *testing.T) {
+	path := t.TempDir() + "/migrate_check.db"
+
+	conn, err := openRaw(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Exec(`CREATE TABLE IF NOT EXISTS albums (
+		ia_identifier TEXT PRIMARY KEY,
+		title         TEXT,
+		creator       TEXT,
+		collection    TEXT,
+		art_url       TEXT,
+		track_count   INTEGER NOT NULL DEFAULT 0,
+		status        TEXT NOT NULL DEFAULT 'pending'
+			CHECK(status IN ('pending','resolving','resolved','failed')),
+		error_message TEXT,
+		downloads     INTEGER NOT NULL DEFAULT 0,
+		retry_count   INTEGER NOT NULL DEFAULT 0,
+		prechecked    INTEGER NOT NULL DEFAULT 0,
+		created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+	)`)
+	conn.Exec(`CREATE TABLE IF NOT EXISTS tracks (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		album_id      TEXT NOT NULL,
+		filename      TEXT NOT NULL,
+		title         TEXT,
+		track_number  INTEGER,
+		format        TEXT,
+		bitrate       INTEGER,
+		duration      REAL,
+		download_url  TEXT NOT NULL,
+		status        TEXT NOT NULL DEFAULT 'pending'
+			CHECK(status IN ('pending','processing','completed','failed')),
+		worker_id     TEXT,
+		locked_at     TEXT,
+		retry_count   INTEGER NOT NULL DEFAULT 0,
+		error_message TEXT,
+		created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+		updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+		UNIQUE(album_id, filename)
+	)`)
+	conn.Exec(`INSERT INTO albums(ia_identifier, title, status) VALUES('old-album', 'Old Album', 'pending')`)
+	conn.Exec(`INSERT INTO tracks(album_id, filename, download_url, status) VALUES('old-album', 'old.mp3', 'https://example.com/old.mp3', 'pending')`)
+	conn.Close()
+
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open after check constraint migration: %v", err)
+	}
+	defer db.Close()
+
+	hasAlbums, err := checkConstraintHasStatus(db.Conn, "albums", "unavailable")
+	if err != nil {
+		t.Fatalf("check albums constraint: %v", err)
+	}
+	if !hasAlbums {
+		t.Error("albums CHECK constraint should include 'unavailable' after migration")
+	}
+
+	hasTracks, err := checkConstraintHasStatus(db.Conn, "tracks", "unavailable")
+	if err != nil {
+		t.Fatalf("check tracks constraint: %v", err)
+	}
+	if !hasTracks {
+		t.Error("tracks CHECK constraint should include 'unavailable' after migration")
+	}
+
+	var title string
+	if err := db.Conn.QueryRow(`SELECT title FROM albums WHERE ia_identifier='old-album'`).Scan(&title); err != nil {
+		t.Fatalf("query old album: %v", err)
+	}
+	if title != "Old Album" {
+		t.Errorf("expected 'Old Album', got %q", title)
+	}
+
+	var filename string
+	if err := db.Conn.QueryRow(`SELECT filename FROM tracks WHERE album_id='old-album'`).Scan(&filename); err != nil {
+		t.Fatalf("query old track: %v", err)
+	}
+	if filename != "old.mp3" {
+		t.Errorf("expected 'old.mp3', got %q", filename)
+	}
+
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status) VALUES('new-unavail', 'unavailable')`)
+	stats, _ := GetCombinedStats(db.Conn)
+	if stats.Albums.Unavailable != 1 {
+		t.Errorf("expected 1 unavailable album after insert, got %d", stats.Albums.Unavailable)
+	}
+
+	db.Conn.Exec(`INSERT INTO tracks(album_id, filename, download_url, status) VALUES('old-album', 'new.mp3', 'https://example.com/new.mp3', 'unavailable')`)
+	stats, _ = GetCombinedStats(db.Conn)
+	if stats.Tracks.Unavailable != 1 {
+		t.Errorf("expected 1 unavailable track after insert, got %d", stats.Tracks.Unavailable)
+	}
+}
+
 func TestResetStuckTracks(t *testing.T) {
 	db := testDB(t)
 	BulkInsertAlbums(db.Conn, testAlbumInserts("album-a"))

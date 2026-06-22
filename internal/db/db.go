@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -70,7 +71,7 @@ func (db *DB) migrate() error {
 			art_url       TEXT,
 			track_count   INTEGER NOT NULL DEFAULT 0,
 			status        TEXT NOT NULL DEFAULT 'pending'
-				CHECK(status IN ('pending','resolving','resolved','failed')),
+				CHECK(status IN ('pending','resolving','resolved','failed','unavailable')),
 			error_message TEXT,
 			downloads     INTEGER NOT NULL DEFAULT 0,
 			retry_count   INTEGER NOT NULL DEFAULT 0,
@@ -100,7 +101,7 @@ func (db *DB) migrate() error {
 			duration      REAL,
 			download_url  TEXT NOT NULL,
 			status        TEXT NOT NULL DEFAULT 'pending'
-				CHECK(status IN ('pending','processing','completed','failed')),
+				CHECK(status IN ('pending','processing','completed','failed','unavailable')),
 			worker_id     TEXT,
 			locked_at     TEXT,
 			retry_count   INTEGER NOT NULL DEFAULT 0,
@@ -130,6 +131,10 @@ func (db *DB) migrate() error {
 		if _, err := db.Conn.Exec(q); err != nil {
 			return fmt.Errorf("exec %q: %w", q, err)
 		}
+	}
+
+	if err := db.migrateUnavailableCheckConstraint(); err != nil {
+		return fmt.Errorf("unavailable check migration: %w", err)
 	}
 
 	return nil
@@ -199,4 +204,144 @@ func columnExists(db *sql.DB, table, column string) bool {
 		}
 	}
 	return false
+}
+
+func checkConstraintHasStatus(sqlDB *sql.DB, table, status string) (bool, error) {
+	var createSQL string
+	err := sqlDB.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&createSQL)
+	if err != nil {
+		return false, fmt.Errorf("check constraint %s: %w", table, err)
+	}
+	return strings.Contains(createSQL, fmt.Sprintf("'%s'", status)), nil
+}
+
+func (db *DB) migrateUnavailableCheckConstraint() error {
+	hasAlbums, err := checkConstraintHasStatus(db.Conn, "albums", "unavailable")
+	if err != nil {
+		return err
+	}
+	hasTracks, err := checkConstraintHasStatus(db.Conn, "tracks", "unavailable")
+	if err != nil {
+		return err
+	}
+	if hasAlbums && hasTracks {
+		return nil
+	}
+
+	db.Conn.Exec("PRAGMA foreign_keys = OFF")
+	defer db.Conn.Exec("PRAGMA foreign_keys = ON")
+
+	if !hasAlbums && tableExists(db.Conn, "albums") {
+		if err := recreateTableWithUnavailable(db.Conn, "albums"); err != nil {
+			return fmt.Errorf("migrate albums: %w", err)
+		}
+	}
+	if !hasTracks && tableExists(db.Conn, "tracks") {
+		if err := recreateTableWithUnavailable(db.Conn, "tracks"); err != nil {
+			return fmt.Errorf("migrate tracks: %w", err)
+		}
+	}
+	return nil
+}
+
+func recreateTableWithUnavailable(sqlDB *sql.DB, table string) error {
+	switch table {
+	case "albums":
+		return recreateAlbumsWithUnavailable(sqlDB)
+	case "tracks":
+		return recreateTracksWithUnavailable(sqlDB)
+	}
+	return fmt.Errorf("unknown table: %s", table)
+}
+
+func recreateAlbumsWithUnavailable(sqlDB *sql.DB) error {
+	_, err := sqlDB.Exec(`
+		CREATE TABLE albums_new (
+			ia_identifier TEXT PRIMARY KEY,
+			title         TEXT,
+			creator       TEXT,
+			collection    TEXT,
+			art_url       TEXT,
+			track_count   INTEGER NOT NULL DEFAULT 0,
+			status        TEXT NOT NULL DEFAULT 'pending'
+				CHECK(status IN ('pending','resolving','resolved','failed','unavailable')),
+			error_message TEXT,
+			downloads     INTEGER NOT NULL DEFAULT 0,
+			retry_count   INTEGER NOT NULL DEFAULT 0,
+			prechecked    INTEGER NOT NULL DEFAULT 0,
+			created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+		)`)
+	if err != nil {
+		return fmt.Errorf("create albums_new: %w", err)
+	}
+	_, err = sqlDB.Exec(`INSERT INTO albums_new SELECT * FROM albums`)
+	if err != nil {
+		return fmt.Errorf("copy albums: %w", err)
+	}
+	_, err = sqlDB.Exec(`DROP TABLE albums`)
+	if err != nil {
+		return fmt.Errorf("drop albums: %w", err)
+	}
+	_, err = sqlDB.Exec(`ALTER TABLE albums_new RENAME TO albums`)
+	if err != nil {
+		return fmt.Errorf("rename albums_new: %w", err)
+	}
+	_, err = sqlDB.Exec(`CREATE INDEX IF NOT EXISTS idx_albums_status ON albums(status)`)
+	if err != nil {
+		return fmt.Errorf("reindex albums: %w", err)
+	}
+	return nil
+}
+
+func recreateTracksWithUnavailable(sqlDB *sql.DB) error {
+	_, err := sqlDB.Exec(`
+		CREATE TABLE tracks_new (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			album_id      TEXT NOT NULL,
+			filename      TEXT NOT NULL,
+			title         TEXT,
+			track_number  INTEGER,
+			format        TEXT,
+			bitrate       INTEGER,
+			duration      REAL,
+			download_url  TEXT NOT NULL,
+			status        TEXT NOT NULL DEFAULT 'pending'
+				CHECK(status IN ('pending','processing','completed','failed','unavailable')),
+			worker_id     TEXT,
+			locked_at     TEXT,
+			retry_count   INTEGER NOT NULL DEFAULT 0,
+			error_message TEXT,
+			created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+			UNIQUE(album_id, filename)
+		)`)
+	if err != nil {
+		return fmt.Errorf("create tracks_new: %w", err)
+	}
+	_, err = sqlDB.Exec(`INSERT INTO tracks_new SELECT * FROM tracks`)
+	if err != nil {
+		return fmt.Errorf("copy tracks: %w", err)
+	}
+	_, err = sqlDB.Exec(`DROP TABLE tracks`)
+	if err != nil {
+		return fmt.Errorf("drop tracks: %w", err)
+	}
+	_, err = sqlDB.Exec(`ALTER TABLE tracks_new RENAME TO tracks`)
+	if err != nil {
+		return fmt.Errorf("rename tracks_new: %w", err)
+	}
+	_, err = sqlDB.Exec(`CREATE INDEX IF NOT EXISTS idx_tracks_status ON tracks(status)`)
+	if err != nil {
+		return fmt.Errorf("reindex tracks status: %w", err)
+	}
+	_, err = sqlDB.Exec(`CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album_id)`)
+	if err != nil {
+		return fmt.Errorf("reindex tracks album: %w", err)
+	}
+	_, err = sqlDB.Exec(`CREATE INDEX IF NOT EXISTS idx_tracks_locked ON tracks(status, locked_at)`)
+	if err != nil {
+		return fmt.Errorf("reindex tracks locked: %w", err)
+	}
+	return nil
 }

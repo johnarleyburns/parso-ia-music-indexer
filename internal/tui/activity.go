@@ -24,6 +24,8 @@ var (
 	eventAlbumResolvingStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#a78bfa"))
 	eventAlbumResolvedStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
 	eventAlbumFailedStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
+	eventAlbumUnavailableStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
+	eventAnalysisUnavailableStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
 	eventInfoStyle                = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
 	eventTimeStyle                = lipgloss.NewStyle().Foreground(lipgloss.Color("#4b5563"))
 )
@@ -62,6 +64,10 @@ func eventStyle(t EventType) lipgloss.Style {
 		return eventAlbumResolvedStyle
 	case EventAlbumFailed:
 		return eventAlbumFailedStyle
+	case EventAlbumUnavailable:
+		return eventAlbumUnavailableStyle
+	case EventAnalysisUnavailable:
+		return eventAnalysisUnavailableStyle
 	default:
 		return eventInfoStyle
 	}
@@ -101,6 +107,10 @@ func eventPrefix(t EventType) string {
 		return "\u2611"
 	case EventAlbumFailed:
 		return "\u2612"
+	case EventAlbumUnavailable:
+		return "\u2612"
+	case EventAnalysisUnavailable:
+		return "\u2718"
 	default:
 		return "\u2022"
 	}

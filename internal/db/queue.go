@@ -7,19 +7,22 @@ import (
 )
 
 type AlbumStats struct {
-	Total    int
-	Pending  int
-	Resolving int
-	Resolved int
-	Failed   int
+	Total        int
+	Pending      int
+	Resolving    int
+	Resolved     int
+	Failed       int
+	Unavailable  int
+	Unprechecked int
 }
 
 type TrackStats struct {
-	Total      int
-	Pending    int
-	Processing int
-	Completed  int
-	Failed     int
+	Total       int
+	Pending     int
+	Processing  int
+	Completed   int
+	Failed      int
+	Unavailable int
 }
 
 type CombinedStats struct {
@@ -108,6 +111,8 @@ func GetCombinedStats(db *sql.DB) (*CombinedStats, error) {
 			s.Albums.Resolved = count
 		case "failed":
 			s.Albums.Failed = count
+		case "unavailable":
+			s.Albums.Unavailable = count
 		}
 	}
 
@@ -132,7 +137,14 @@ func GetCombinedStats(db *sql.DB) (*CombinedStats, error) {
 			s.Tracks.Completed = count
 		case "failed":
 			s.Tracks.Failed = count
+		case "unavailable":
+			s.Tracks.Unavailable = count
 		}
+	}
+
+	err = db.QueryRow(`SELECT count(*) FROM albums WHERE status = 'resolved' AND prechecked = 0 AND track_count > 0`).Scan(&s.Albums.Unprechecked)
+	if err != nil {
+		s.Albums.Unprechecked = 0
 	}
 
 	return s, nil
@@ -312,6 +324,15 @@ func MarkAlbumFailed(db *sql.DB, identifier string, errMsg string) error {
 	return err
 }
 
+func MarkAlbumUnavailable(db *sql.DB, identifier string, errMsg string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := db.Exec(
+		`UPDATE albums SET status='unavailable', error_message=?, updated_at=? WHERE ia_identifier=?`,
+		errMsg, now, identifier,
+	)
+	return err
+}
+
 func FlagAlbumPoorQuality(sqlDB *sql.DB, trackID int, albumID string, reason string) (int64, error) {
 	tx, err := sqlDB.Begin()
 	if err != nil {
@@ -322,7 +343,7 @@ func FlagAlbumPoorQuality(sqlDB *sql.DB, trackID int, albumID string, reason str
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	_, err = tx.Exec(
-		`UPDATE tracks SET status='failed', error_message=?, updated_at=? WHERE id=?`,
+		`UPDATE tracks SET status='unavailable', error_message=?, updated_at=? WHERE id=?`,
 		reason, now, trackID,
 	)
 	if err != nil {
@@ -330,7 +351,7 @@ func FlagAlbumPoorQuality(sqlDB *sql.DB, trackID int, albumID string, reason str
 	}
 
 	result, err := tx.Exec(
-		`UPDATE tracks SET status='failed', error_message=?, updated_at=?
+		`UPDATE tracks SET status='unavailable', error_message=?, updated_at=?
 		 WHERE album_id=? AND status='pending'`,
 		reason, now, albumID,
 	)
@@ -339,7 +360,7 @@ func FlagAlbumPoorQuality(sqlDB *sql.DB, trackID int, albumID string, reason str
 	}
 
 	_, err = tx.Exec(
-		`UPDATE albums SET status='failed', error_message=?, updated_at=? WHERE ia_identifier=?`,
+		`UPDATE albums SET status='unavailable', error_message=?, updated_at=? WHERE ia_identifier=?`,
 		reason, now, albumID,
 	)
 	if err != nil {
@@ -486,6 +507,15 @@ func MarkTrackFailed(db *sql.DB, trackID int, errMsg string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := db.Exec(
 		`UPDATE tracks SET status='failed', error_message=?, retry_count=retry_count+1, updated_at=? WHERE id=?`,
+		errMsg, now, trackID,
+	)
+	return err
+}
+
+func MarkTrackUnavailable(db *sql.DB, trackID int, errMsg string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := db.Exec(
+		`UPDATE tracks SET status='unavailable', error_message=?, updated_at=? WHERE id=?`,
 		errMsg, now, trackID,
 	)
 	return err
@@ -762,6 +792,36 @@ func FailAlbumAndPendingTracksByID(sqlDB *sql.DB, albumID, reason string) (int64
 
 	_, err = tx.Exec(
 		`UPDATE albums SET status='failed', error_message=?, updated_at=? WHERE ia_identifier=?`,
+		reason, now, albumID,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	skipped, _ := result.RowsAffected()
+	return skipped, tx.Commit()
+}
+
+func FailAlbumAndPendingTracksUnavailable(sqlDB *sql.DB, albumID, reason string) (int64, error) {
+	tx, err := sqlDB.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	result, err := tx.Exec(
+		`UPDATE tracks SET status='unavailable', error_message=?, updated_at=?
+		 WHERE album_id=? AND status='pending'`,
+		reason, now, albumID,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	_, err = tx.Exec(
+		`UPDATE albums SET status='unavailable', error_message=?, updated_at=? WHERE ia_identifier=?`,
 		reason, now, albumID,
 	)
 	if err != nil {
