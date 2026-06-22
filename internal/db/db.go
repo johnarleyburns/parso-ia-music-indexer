@@ -275,7 +275,8 @@ func recreateAlbumsWithUnavailable(sqlDB *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("create albums_new: %w", err)
 	}
-	_, err = sqlDB.Exec(`INSERT INTO albums_new SELECT * FROM albums`)
+	_, err = sqlDB.Exec(`INSERT INTO albums_new(ia_identifier, title, creator, collection, art_url, track_count, status, error_message, downloads, retry_count, prechecked, created_at, updated_at)
+		SELECT ia_identifier, title, creator, collection, art_url, track_count, status, error_message, downloads, retry_count, prechecked, created_at, updated_at FROM albums`)
 	if err != nil {
 		return fmt.Errorf("copy albums: %w", err)
 	}
@@ -319,7 +320,8 @@ func recreateTracksWithUnavailable(sqlDB *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("create tracks_new: %w", err)
 	}
-	_, err = sqlDB.Exec(`INSERT INTO tracks_new SELECT * FROM tracks`)
+	_, err = sqlDB.Exec(`INSERT INTO tracks_new(id, album_id, filename, title, track_number, format, bitrate, duration, download_url, status, worker_id, locked_at, retry_count, error_message, created_at, updated_at)
+		SELECT id, album_id, filename, title, track_number, format, bitrate, duration, download_url, status, worker_id, locked_at, retry_count, error_message, created_at, updated_at FROM tracks`)
 	if err != nil {
 		return fmt.Errorf("copy tracks: %w", err)
 	}
