@@ -1386,6 +1386,7 @@ func runHeadless(cfg *config.Config) {
 			"completed":   stats.Tracks.Completed,
 			"failed":      stats.Tracks.Failed,
 			"unavailable": stats.Tracks.Unavailable,
+			"untagged":    stats.Tracks.UntaggedCount,
 		},
 		"embeddings": map[string]int{
 			"count": embedCount,

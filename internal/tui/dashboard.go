@@ -48,6 +48,9 @@ type DashboardModel struct {
 	CleanerCount  int
 	CleanerStates map[string]*workerState
 
+	EnhancerCount  int
+	EnhancerStates map[string]*workerState
+
 	Events []ActivityEvent
 }
 
@@ -63,6 +66,8 @@ func NewDashboardModel(sqlDB *sql.DB) DashboardModel {
 		AnalyzerStates:  make(map[string]*workerState),
 		CleanerCount:    0,
 		CleanerStates:   make(map[string]*workerState),
+		EnhancerCount:   0,
+		EnhancerStates:  make(map[string]*workerState),
 		Events:          make([]ActivityEvent, 0),
 	}
 }
@@ -77,6 +82,10 @@ func isResolver(id string) bool {
 
 func isCleaner(id string) bool {
 	return strings.HasPrefix(id, "cleaner-")
+}
+
+func isEnhancer(id string) bool {
+	return strings.HasPrefix(id, "enhancer-")
 }
 
 func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
@@ -125,6 +134,9 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 			} else if isCleaner(msg.WorkerID) {
 				m.CleanerCount++
 				m.CleanerStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
+			} else if isEnhancer(msg.WorkerID) {
+				m.EnhancerCount++
+				m.EnhancerStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
 			} else {
 				m.AnalyzerCount++
 				m.AnalyzerStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
@@ -142,6 +154,11 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 					m.CleanerCount--
 				}
 				delete(m.CleanerStates, msg.WorkerID)
+			} else if isEnhancer(msg.WorkerID) {
+				if m.EnhancerCount > 0 {
+					m.EnhancerCount--
+				}
+				delete(m.EnhancerStates, msg.WorkerID)
 			} else {
 				if m.AnalyzerCount > 0 {
 					m.AnalyzerCount--
@@ -156,6 +173,10 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 			} else if strings.Contains(msg.Message, "Cleaner") {
 				if m.CleanerCount > 0 {
 					m.CleanerCount--
+				}
+			} else if strings.Contains(msg.Message, "Enhancer") {
+				if m.EnhancerCount > 0 {
+					m.EnhancerCount--
 				}
 			} else {
 				if m.AnalyzerCount > 0 {
@@ -303,7 +324,8 @@ func (m DashboardModel) View() tea.View {
 	trackContent += drawRow("Processing: ", fmt.Sprintf("%d", stats.Tracks.Processing), processingStyle) + "\n"
 	trackContent += drawRow("Completed:  ", fmt.Sprintf("%d", stats.Tracks.Completed), completeStyle) + "\n"
 	trackContent += drawRow("Failed:     ", fmt.Sprintf("%d", stats.Tracks.Failed), failedStyle) + "\n"
-	trackContent += drawRow("Unavail:    ", fmt.Sprintf("%d", stats.Tracks.Unavailable), unavailableStyle)
+	trackContent += drawRow("Unavail:    ", fmt.Sprintf("%d", stats.Tracks.Unavailable), unavailableStyle) + "\n"
+	trackContent += drawRow("No Tags:    ", fmt.Sprintf("%d", stats.Tracks.UntaggedCount), pendingStyle)
 
 	statsRow := lipgloss.JoinHorizontal(lipgloss.Top,
 		statsPanel.Render(albumContent),
@@ -341,10 +363,11 @@ func (m DashboardModel) buildRightPanel(titleStyle, panelBorder lipgloss.Style, 
 	resolverSection := m.buildPoolSection(sectionTitle, "Resolver Pool", m.ResolverCount, m.ResolverStates, "[r] add  [R] remove")
 	analyzerSection := m.buildPoolSection(sectionTitle, "Analyzer Pool", m.AnalyzerCount, m.AnalyzerStates, "[w] add  [W] remove")
 	cleanerSection := m.buildPoolSection(sectionTitle, "Cleaner Pool", m.CleanerCount, m.CleanerStates, "[c] add  [C] remove")
+	enhancerSection := m.buildPoolSection(sectionTitle, "Enhancer Pool", m.EnhancerCount, m.EnhancerStates, "[e] add  [E] remove")
 
 	const panelOverhead = 4 // 2 border + 2 padding
 
-	controlsContentHeight := lipgloss.Height(coordSection) + lipgloss.Height(resolverSection) + lipgloss.Height(analyzerSection) + lipgloss.Height(cleanerSection) + 3
+	controlsContentHeight := lipgloss.Height(coordSection) + lipgloss.Height(resolverSection) + lipgloss.Height(analyzerSection) + lipgloss.Height(cleanerSection) + lipgloss.Height(enhancerSection) + 3
 
 	availBodyHeight := m.Height - 9 // tab(1) + status(4) + help(1) + title+gaps(3)
 
@@ -357,7 +380,7 @@ func (m DashboardModel) buildRightPanel(titleStyle, panelBorder lipgloss.Style, 
 	feedContent += RenderActivityFeed(m.Events, width-4, feedContentHeight-1)
 
 	controlsPanel := panelBorder.Width(width).Render(
-		coordSection + "\n" + resolverSection + "\n" + analyzerSection + "\n" + cleanerSection,
+		coordSection + "\n" + resolverSection + "\n" + analyzerSection + "\n" + cleanerSection + "\n" + enhancerSection,
 	)
 	feedPanel := panelBorder.Width(width).Render(feedContent)
 

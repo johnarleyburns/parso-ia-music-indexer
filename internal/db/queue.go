@@ -17,12 +17,13 @@ type AlbumStats struct {
 }
 
 type TrackStats struct {
-	Total       int
-	Pending     int
-	Processing  int
-	Completed   int
-	Failed      int
-	Unavailable int
+	Total         int
+	Pending       int
+	Processing    int
+	Completed     int
+	Failed        int
+	Unavailable   int
+	UntaggedCount int
 }
 
 type CombinedStats struct {
@@ -197,6 +198,13 @@ func GetCombinedStats(db *sql.DB) (*CombinedStats, error) {
 		case "unavailable":
 			s.Tracks.Unavailable = count
 		}
+	}
+
+	err = db.QueryRow(`SELECT count(*) FROM tracks t
+		INNER JOIN track_embeddings e ON t.id = e.track_id
+		WHERE t.status = 'completed' AND (t.tags IS NULL OR t.tags = '')`).Scan(&s.Tracks.UntaggedCount)
+	if err != nil {
+		s.Tracks.UntaggedCount = 0
 	}
 
 	err = db.QueryRow(`SELECT count(*) FROM albums WHERE status = 'resolved' AND prechecked = 0 AND track_count > 0`).Scan(&s.Albums.Unprechecked)
