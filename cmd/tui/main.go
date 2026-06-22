@@ -923,6 +923,20 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan s
 		return
 	}
 
+	if isMusic, reason := ia.IsMusicContent(album); !isMusic {
+		dbMu.Lock()
+		db.MarkAlbumUnavailable(sqlDB.Conn, albumID, reason)
+		dbMu.Unlock()
+		events <- tui.ActivityEvent{
+			Type:       tui.EventAlbumUnavailable,
+			Timestamp:  time.Now(),
+			Identifier: albumID,
+			WorkerID:   workerID,
+			Message:    fmt.Sprintf("[%s] Album %s: %s", workerID, albumID, reason),
+		}
+		return
+	}
+
 	if len(album.Tracks) == 0 {
 		dbMu.Lock()
 		db.MarkAlbumUnavailable(sqlDB.Conn, albumID, "no acceptable MP3 tracks found")

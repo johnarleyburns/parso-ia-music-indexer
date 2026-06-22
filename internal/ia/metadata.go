@@ -48,6 +48,10 @@ func LookupAlbumMetadata(ctx context.Context, client *http.Client, identifier st
 		Collection:           full.Metadata.CollectionString(),
 		ArtURL:               fmt.Sprintf("https://archive.org/services/img/%s", identifier),
 		AccessRestrictedItem: bool(full.Metadata.AccessRestrictedItem),
+		Subjects:             full.Metadata.SubjectStrings(),
+		MediaType:            full.Metadata.MediaType,
+		Description:          full.Metadata.Description,
+		Genres:               full.Metadata.GenreStrings(),
 	}
 
 	if full.Metadata.AccessRestrictedItem {
@@ -138,4 +142,59 @@ func titleCase(s string) string {
 		}
 	}
 	return strings.Join(words, " ")
+}
+
+var nonMusicSubjects = []string{
+	"non-music", "audiobook", "spoken word",
+}
+
+var nonMusicTitlePatterns = []string{
+	"language course", "learn spanish", "learn french", "learn german",
+	"learn mandarin", "learn italian", "learn russian", "learn japanese",
+	"language instruction", "listen & learn",
+}
+
+func IsMusicContent(metadata *AlbumMetadata) (bool, string) {
+	for _, subject := range metadata.Subjects {
+		lower := strings.ToLower(subject)
+		for _, nm := range nonMusicSubjects {
+			if lower == nm || strings.Contains(lower, nm) {
+				return false, fmt.Sprintf("non-music subject: %q", subject)
+			}
+		}
+	}
+
+	for _, genre := range metadata.Genres {
+		lower := strings.ToLower(genre)
+		for _, nm := range nonMusicSubjects {
+			if lower == nm || strings.Contains(lower, nm) {
+				return false, fmt.Sprintf("non-music genre: %q", genre)
+			}
+		}
+	}
+
+	if metadata.MediaType == "texts" || metadata.MediaType == "movies" || metadata.MediaType == "data" {
+		return false, fmt.Sprintf("non-audio mediatype: %s", metadata.MediaType)
+	}
+
+	titleLower := strings.ToLower(metadata.Title)
+	for _, p := range nonMusicTitlePatterns {
+		if strings.Contains(titleLower, p) {
+			return false, fmt.Sprintf("non-music title pattern: %q", p)
+		}
+	}
+
+	descLower := strings.ToLower(metadata.Description)
+	for _, p := range nonMusicTitlePatterns {
+		if strings.Contains(descLower, p) {
+			return false, fmt.Sprintf("non-music description pattern: %q", p)
+		}
+	}
+
+	creatorLower := strings.ToLower(metadata.Creator)
+	if strings.Contains(creatorLower, "librivox") {
+		return false, "librivox creator"
+	}
+
+	return true, ""
 }

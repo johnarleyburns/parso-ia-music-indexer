@@ -50,6 +50,10 @@ type IAItemMetadata struct {
 	Creator              json.RawMessage `json:"creator"`
 	Collection           json.RawMessage `json:"collection"`
 	AccessRestrictedItem FlexBool        `json:"access-restricted-item"`
+	Subject              json.RawMessage `json:"subject"`
+	MediaType            string          `json:"mediatype"`
+	Description          string          `json:"description"`
+	Genre                json.RawMessage `json:"genre"`
 }
 
 func (m *IAItemMetadata) CreatorString() string {
@@ -58,6 +62,14 @@ func (m *IAItemMetadata) CreatorString() string {
 
 func (m *IAItemMetadata) CollectionString() string {
 	return rawMessageToString(m.Collection)
+}
+
+func (m *IAItemMetadata) SubjectStrings() []string {
+	return rawMessageToSlice(m.Subject)
+}
+
+func (m *IAItemMetadata) GenreStrings() []string {
+	return rawMessageToSlice(m.Genre)
 }
 
 func rawMessageToString(raw json.RawMessage) string {
@@ -78,6 +90,24 @@ func rawMessageToString(raw json.RawMessage) string {
 	return ""
 }
 
+func rawMessageToSlice(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return []string{s}
+	}
+
+	var arr []string
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		return arr
+	}
+
+	return nil
+}
+
 type IAMetadataFile struct {
 	Name    string `json:"name"`
 	Format  string `json:"format"`
@@ -95,6 +125,10 @@ type AlbumMetadata struct {
 	ArtURL               string
 	Tracks               []TrackFile
 	AccessRestrictedItem bool
+	Subjects             []string
+	MediaType            string
+	Description          string
+	Genres               []string
 }
 
 type TrackFile struct {
