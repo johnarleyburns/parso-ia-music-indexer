@@ -50,7 +50,7 @@ func LookupAlbumMetadata(ctx context.Context, client *http.Client, identifier st
 		AccessRestrictedItem: bool(full.Metadata.AccessRestrictedItem),
 		Subjects:             full.Metadata.SubjectStrings(),
 		MediaType:            full.Metadata.MediaType,
-		Description:          full.Metadata.Description,
+		Description:          rawMessageToString(full.Metadata.Description),
 		Genres:               full.Metadata.GenreStrings(),
 	}
 

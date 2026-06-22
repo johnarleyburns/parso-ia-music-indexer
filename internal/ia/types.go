@@ -52,7 +52,7 @@ type IAItemMetadata struct {
 	AccessRestrictedItem FlexBool        `json:"access-restricted-item"`
 	Subject              json.RawMessage `json:"subject"`
 	MediaType            string          `json:"mediatype"`
-	Description          string          `json:"description"`
+	Description          json.RawMessage `json:"description"`
 	Genre                json.RawMessage `json:"genre"`
 }
 
