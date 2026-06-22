@@ -231,6 +231,9 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 				if ws, ok := m.AnalyzerStates[msg.WorkerID]; ok {
 					ws.CurrentTask = msg.Identifier
 				}
+				if ws, ok := m.EnhancerStates[msg.WorkerID]; ok {
+					ws.CurrentTask = msg.Identifier
+				}
 			}
 		case EventAnalysisComplete:
 			if msg.WorkerID != "" {
@@ -238,10 +241,18 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 					ws.ProcessedCount++
 					ws.CurrentTask = ""
 				}
+				if ws, ok := m.EnhancerStates[msg.WorkerID]; ok {
+					ws.ProcessedCount++
+					ws.CurrentTask = ""
+				}
 			}
 		case EventAnalysisFailed:
 			if msg.WorkerID != "" {
 				if ws, ok := m.AnalyzerStates[msg.WorkerID]; ok {
+					ws.FailedCount++
+					ws.CurrentTask = ""
+				}
+				if ws, ok := m.EnhancerStates[msg.WorkerID]; ok {
 					ws.FailedCount++
 					ws.CurrentTask = ""
 				}
@@ -363,7 +374,11 @@ func (m DashboardModel) buildRightPanel(titleStyle, panelBorder lipgloss.Style, 
 	resolverSection := m.buildPoolSection(sectionTitle, "Resolver Pool", m.ResolverCount, m.ResolverStates, "[r] add  [R] remove")
 	analyzerSection := m.buildPoolSection(sectionTitle, "Analyzer Pool", m.AnalyzerCount, m.AnalyzerStates, "[w] add  [W] remove")
 	cleanerSection := m.buildPoolSection(sectionTitle, "Cleaner Pool", m.CleanerCount, m.CleanerStates, "[c] add  [C] remove")
-	enhancerSection := m.buildPoolSection(sectionTitle, "Enhancer Pool", m.EnhancerCount, m.EnhancerStates, "[e] add  [E] remove")
+	enhancerControls := fmt.Sprintf("[e] add  [E] remove  ·  Remaining: %d", m.Stats.Tracks.UntaggedCount)
+	if m.Stats == nil {
+		enhancerControls = "[e] add  [E] remove  ·  Remaining: -"
+	}
+	enhancerSection := m.buildPoolSection(sectionTitle, "Enhancer Pool", m.EnhancerCount, m.EnhancerStates, enhancerControls)
 
 	const panelOverhead = 4 // 2 border + 2 padding
 

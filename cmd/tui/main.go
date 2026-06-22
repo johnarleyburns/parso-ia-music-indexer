@@ -761,7 +761,7 @@ func tagEnhancerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-cha
 		}
 
 		events <- tui.ActivityEvent{
-			Type:       tui.EventInfo,
+			Type:       tui.EventAnalysisStarted,
 			Timestamp:  time.Now(),
 			Identifier: album.IAIdentifier,
 			WorkerID:   workerID,
@@ -775,21 +775,39 @@ func tagEnhancerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-cha
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			if err := iaLimiter.Wait(ctx); err != nil {
 				cancel()
-				sleepOrStop(10*time.Second, stopCh)
-				continue
-			}
-			meta, metaErr := ia.LookupAlbumMetadata(ctx, iaClient, album.IAIdentifier)
-			cancel()
-			if metaErr != nil {
 				events <- tui.ActivityEvent{
 					Type:       tui.EventInfo,
 					Timestamp:  time.Now(),
 					Identifier: album.IAIdentifier,
 					WorkerID:   workerID,
-					Message:    fmt.Sprintf("[%s] Metadata fetch error %s: %v", workerID, album.IAIdentifier, metaErr),
-					Error:      metaErr.Error(),
+					Message:    fmt.Sprintf("[%s] Rate limit wait for %s, will retry", workerID, album.IAIdentifier),
 				}
-				sleepOrStop(5*time.Second, stopCh)
+				sleepOrStop(30*time.Second, stopCh)
+				continue
+			}
+			meta, metaErr := ia.LookupAlbumMetadata(ctx, iaClient, album.IAIdentifier)
+			cancel()
+			if metaErr != nil {
+				errMsg := fmt.Sprintf("metadata: %v", metaErr)
+				if isTransientError(errMsg) {
+					events <- tui.ActivityEvent{
+						Type:       tui.EventInfo,
+						Timestamp:  time.Now(),
+						Identifier: album.IAIdentifier,
+						WorkerID:   workerID,
+						Message:    fmt.Sprintf("[%s] Transient metadata error %s: %v, will retry", workerID, album.IAIdentifier, metaErr),
+					}
+					sleepOrStop(5*time.Second, stopCh)
+				} else {
+					events <- tui.ActivityEvent{
+						Type:       tui.EventAnalysisFailed,
+						Timestamp:  time.Now(),
+						Identifier: album.IAIdentifier,
+						WorkerID:   workerID,
+						Message:    fmt.Sprintf("[%s] Metadata fetch error %s: %v", workerID, album.IAIdentifier, metaErr),
+						Error:      metaErr.Error(),
+					}
+				}
 				continue
 			}
 			subjects = strings.Join(meta.Subjects, ", ")
@@ -846,7 +864,7 @@ func tagEnhancerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-cha
 			WorkerID:   workerID,
 			Message:    fmt.Sprintf("[%s] Enhanced %s with %d tags (%d tracks)", workerID, album.IAIdentifier, len(strings.Split(tags, ", ")), album.TrackCount),
 		}
-		metrics.RecordAnalyzerCompletion()
+		metrics.RecordEnhancerCompletion()
 	}
 }
 

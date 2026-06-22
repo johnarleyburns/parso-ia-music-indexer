@@ -93,6 +93,7 @@ func RenderStatusBar(metrics *Metrics, stats *db.CombinedStats, rs ResourceStats
 	resolverRate := metrics.ResolverRate()
 	analyzerRate := metrics.AnalyzerRate()
 	cleanerRate := metrics.CleanerRate()
+	enhancerRate := metrics.EnhancerRate()
 
 	var resolverETA string
 	if resolverRate > 0 && stats.Albums.Pending > 0 {
@@ -124,6 +125,16 @@ func RenderStatusBar(metrics *Metrics, stats *db.CombinedStats, rs ResourceStats
 		cleanerETA = "\u2014"
 	}
 
+	var enhancerETA string
+	if enhancerRate > 0 && stats.Tracks.UntaggedCount > 0 {
+		secs := float64(stats.Tracks.UntaggedCount) / enhancerRate
+		enhancerETA = formatETA(time.Duration(secs) * time.Second)
+	} else if stats.Tracks.UntaggedCount == 0 {
+		enhancerETA = "done"
+	} else {
+		enhancerETA = "\u2014"
+	}
+
 	bwVal := pctColor(bwPct).Render(fmt.Sprintf("%.1f KB/s (%.0f%%)", bwKBs, bwPct))
 	apiVal := pctColor(apiPct).Render(fmt.Sprintf("%.2f req/s (%.0f%%)", apiRate, apiPct))
 
@@ -133,6 +144,7 @@ func RenderStatusBar(metrics *Metrics, stats *db.CombinedStats, rs ResourceStats
 		labelStyle.Render("Resolvers:") + " " + valStyle.Render(resolverETA),
 		labelStyle.Render("Analyzers:") + " " + valStyle.Render(analyzerETA),
 		labelStyle.Render("Cleaners:") + " " + valStyle.Render(cleanerETA),
+		labelStyle.Render("Enhancers:") + " " + valStyle.Render(enhancerETA),
 	}
 
 	line2Parts := []string{

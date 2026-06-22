@@ -26,6 +26,7 @@ type Metrics struct {
 	resolverCompletions  []time.Time
 	analyzerCompletions  []time.Time
 	cleanerCompletions   []time.Time
+	enhancerCompletions  []time.Time
 }
 
 func NewMetrics() *Metrics {
@@ -62,6 +63,12 @@ func (m *Metrics) RecordCleanerCompletion() {
 	m.mu.Unlock()
 }
 
+func (m *Metrics) RecordEnhancerCompletion() {
+	m.mu.Lock()
+	m.enhancerCompletions = append(m.enhancerCompletions, time.Now())
+	m.mu.Unlock()
+}
+
 func (m *Metrics) prune(now time.Time) {
 	cutoff := now.Add(-metricsWindow)
 
@@ -94,6 +101,12 @@ func (m *Metrics) prune(now time.Time) {
 		n++
 	}
 	m.cleanerCompletions = m.cleanerCompletions[n:]
+
+	o := 0
+	for o < len(m.enhancerCompletions) && m.enhancerCompletions[o].Before(cutoff) {
+		o++
+	}
+	m.enhancerCompletions = m.enhancerCompletions[o:]
 }
 
 func (m *Metrics) APIRate() float64 {
@@ -173,6 +186,21 @@ func (m *Metrics) CleanerRate() float64 {
 		elapsed = 1
 	}
 	return float64(len(m.cleanerCompletions)) / elapsed
+}
+
+func (m *Metrics) EnhancerRate() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	m.prune(now)
+	if len(m.enhancerCompletions) == 0 {
+		return 0
+	}
+	elapsed := now.Sub(m.enhancerCompletions[0]).Seconds()
+	if elapsed < 1 {
+		elapsed = 1
+	}
+	return float64(len(m.enhancerCompletions)) / elapsed
 }
 
 type InstrumentedTransport struct {
