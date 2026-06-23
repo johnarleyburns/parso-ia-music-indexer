@@ -58,6 +58,23 @@ func isTransientError(errMsg string) bool {
 	return false
 }
 
+func safeGo(fn func(), events chan<- tui.ActivityEvent, label string) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("PANIC in goroutine %q: %v", label, r)
+				events <- tui.ActivityEvent{
+					Type:      tui.EventInfo,
+					Timestamp: time.Now(),
+					Message:   fmt.Sprintf("Worker %q panicked: %v (check debug.log for details)", label, r),
+					Error:     fmt.Sprintf("%v", r),
+				}
+			}
+		}()
+		fn()
+	}()
+}
+
 func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent, controls <-chan tui.ControlCmd, metrics *tui.Metrics, clapClient clap.CLAPClient) {
 	coordRunning := false
 	coordStopCh := make(chan struct{})
@@ -109,13 +126,13 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 				if !coordRunning {
 					coordRunning = true
 					coordStopCh = make(chan struct{})
-					events <- tui.ActivityEvent{
-						Type:      tui.EventCoordStarted,
-						Timestamp: time.Now(),
-						Message:   "Coordinator started (collection discovery)",
-					}
-					go coordinatorLoop(cfg, sqlDB, events, coordStopCh, metrics, iaLimiter)
+				events <- tui.ActivityEvent{
+					Type:      tui.EventCoordStarted,
+					Timestamp: time.Now(),
+					Message:   "Coordinator started (collection discovery)",
 				}
+				safeGo(func() { coordinatorLoop(cfg, sqlDB, events, coordStopCh, metrics, iaLimiter) }, events, "coordinator")
+			}
 			case tui.CmdStopCoordinator:
 				if coordRunning {
 					coordRunning = false
@@ -140,7 +157,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 					WorkerID:   rID,
 					Message:    fmt.Sprintf("Resolver %s started (pool: %d)", rID, resolverCount),
 				}
-				go albumResolverLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, rID, metrics)
+				safeGo(func() { albumResolverLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, rID, metrics) }, events, rID)
 			case tui.CmdRemoveResolver:
 				if resolverCount > 0 {
 					resolverCount--
@@ -169,7 +186,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 					WorkerID:   wID,
 					Message:    fmt.Sprintf("Analyzer %s started (pool: %d)", wID, workerCount),
 				}
-				go workerLoop(cfg, sqlDB, events, stopCh, dbMu, clapClient, iaClient, wID, metrics, iaLimiter, bwLimiter)
+				safeGo(func() { workerLoop(cfg, sqlDB, events, stopCh, dbMu, clapClient, iaClient, wID, metrics, iaLimiter, bwLimiter) }, events, wID)
 			case tui.CmdRemoveWorker:
 				if workerCount > 0 {
 					workerCount--
@@ -191,15 +208,15 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 		nextCleanerID++
 		stopCh := make(chan struct{})
 		cleanerStopChs[nextCleanerID-1] = stopCh
-		events <- tui.ActivityEvent{
-			Type:       tui.EventWorkerStarted,
-			Timestamp:  time.Now(),
-			Identifier: cID,
-			WorkerID:   cID,
-			Message:    fmt.Sprintf("Cleaner %s started (pool: %d)", cID, cleanerCount),
-		}
-		go cleanupWorkerLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, cID, metrics)
-	case tui.CmdRemoveCleaner:
+			events <- tui.ActivityEvent{
+				Type:       tui.EventWorkerStarted,
+				Timestamp:  time.Now(),
+				Identifier: cID,
+				WorkerID:   cID,
+				Message:    fmt.Sprintf("Cleaner %s started (pool: %d)", cID, cleanerCount),
+			}
+			safeGo(func() { cleanupWorkerLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, cID, metrics) }, events, cID)
+		case tui.CmdRemoveCleaner:
 		if cleanerCount > 0 {
 			cleanerCount--
 			for id, ch := range cleanerStopChs {
@@ -220,15 +237,15 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 		nextEnhancerID++
 		stopCh := make(chan struct{})
 		enhancerStopChs[nextEnhancerID-1] = stopCh
-		events <- tui.ActivityEvent{
-			Type:       tui.EventWorkerStarted,
-			Timestamp:  time.Now(),
-			Identifier: eID,
-			WorkerID:   eID,
-			Message:    fmt.Sprintf("Enhancer %s started (pool: %d)", eID, enhancerCount),
-		}
-		go tagEnhancerLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, eID, metrics)
-	case tui.CmdRemoveEnhancer:
+			events <- tui.ActivityEvent{
+				Type:       tui.EventWorkerStarted,
+				Timestamp:  time.Now(),
+				Identifier: eID,
+				WorkerID:   eID,
+				Message:    fmt.Sprintf("Enhancer %s started (pool: %d)", eID, enhancerCount),
+			}
+			safeGo(func() { tagEnhancerLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, eID, metrics) }, events, eID)
+		case tui.CmdRemoveEnhancer:
 		if enhancerCount > 0 {
 			enhancerCount--
 			for id, ch := range enhancerStopChs {
@@ -1310,7 +1327,7 @@ func runTUI(cfg *config.Config) {
 
 	logDir := filepath.Dir(cfg.DBPath)
 	sidecarProc, clapClient, err := clap.EnsureSidecar(cfg.ClapHost, cfg.ClapPort, cfg.ClapSidecarDir, logDir, func(msg string) {
-		fmt.Fprintf(os.Stderr, "%s\n", msg)
+		log.Printf("[sidecar] %s", msg)
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "CLAP sidecar error: %v\n", err)
@@ -1325,7 +1342,7 @@ func runTUI(cfg *config.Config) {
 
 	events := tui.NewEventChannel()
 	controls := tui.NewControlChannel()
-	go runCoordinator(cfg, sqlDB, events, controls, metrics, clapClient)
+	safeGo(func() { runCoordinator(cfg, sqlDB, events, controls, metrics, clapClient) }, events, "runCoordinator")
 
 	m := tui.NewMainModel(cfg, sqlDB.Conn, events, controls, metrics, cfg.DBPath)
 	p := tea.NewProgram(m)
@@ -1345,7 +1362,7 @@ func runTextSearch(cfg *config.Config) {
 
 	logDir := filepath.Dir(cfg.DBPath)
 	sidecarProc, clapClient, err := clap.EnsureSidecar(cfg.ClapHost, cfg.ClapPort, cfg.ClapSidecarDir, logDir, func(msg string) {
-		fmt.Fprintf(os.Stderr, "%s\n", msg)
+		log.Printf("[sidecar] %s", msg)
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "CLAP sidecar error: %v\n", err)
@@ -1400,7 +1417,7 @@ func runHeadless(cfg *config.Config) {
 
 	logDir := filepath.Dir(cfg.DBPath)
 	sidecarProc, clapClient, err := clap.EnsureSidecar(cfg.ClapHost, cfg.ClapPort, cfg.ClapSidecarDir, logDir, func(msg string) {
-		fmt.Fprintf(os.Stderr, "%s\n", msg)
+		log.Printf("[sidecar] %s", msg)
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "CLAP sidecar error: %v\n", err)
@@ -1469,7 +1486,7 @@ func runHeadless(cfg *config.Config) {
 	events := tui.NewEventChannel()
 	controls := tui.NewControlChannel()
 	metrics := tui.NewMetrics()
-	go runCoordinator(cfg, sqlDB, events, controls, metrics, clapClient)
+	safeGo(func() { runCoordinator(cfg, sqlDB, events, controls, metrics, clapClient) }, events, "runCoordinator-headless")
 
 	controls <- tui.ControlCmd{Action: tui.CmdStartCoordinator}
 

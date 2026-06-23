@@ -152,7 +152,9 @@ func (m CollectionsModel) Update(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 			tableHeight = 5
 		}
 		m.table.SetHeight(tableHeight)
-		m.table.SetWidth(msg.Width - 4)
+		if w := msg.Width - 4; w > 0 {
+			m.table.SetWidth(w)
+		}
 	}
 
 	switch m.mode {
@@ -200,6 +202,7 @@ func (m CollectionsModel) updateView(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 			m.table.SetRows(rows)
 			log.Printf("[collections] updateView: table.SetRows called with %d rows, table.Rows()=%d", len(rows), len(m.table.Rows()))
 			m.loaded = true
+			m.table.Focus()
 		}
 		return m, nil
 
@@ -532,14 +535,18 @@ func (m CollectionsModel) viewList() string {
 		s += tv
 
 		idx := m.table.Cursor()
-		rows := m.table.Rows()
-		if idx >= 0 && idx < len(rows) {
-			row := rows[idx]
-			if len(row) > 2 {
-				url := row[2]
-				s += "\n\n  " + urlStyle.Render(url)
+			rows := m.table.Rows()
+			if idx >= 0 && idx < len(rows) {
+				row := rows[idx]
+				if len(row) > 2 {
+					url := row[2]
+					maxW := m.Width - 4
+					if maxW < 20 {
+						maxW = 20
+					}
+					s += "\n\n  " + urlStyle.MaxWidth(maxW).Render(url)
+				}
 			}
-		}
 	}
 
 	s += "\n\n" + helpStyle.Render("  [c] add source  [v] view in browse  [o] open URL  [d] delete  [r] refresh  [↑/↓] navigate")

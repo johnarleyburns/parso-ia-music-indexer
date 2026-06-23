@@ -404,6 +404,10 @@ func (m *MainModel) onTabSwitch(from, to int) tea.Cmd {
 		m.Browse.table.Blur()
 		m.Browse.inputFocused = false
 	}
+	if from == 4 {
+		m.Collections.table.Blur()
+		m.Collections.mode = colModeView
+	}
 	if to == 4 {
 		var cmd tea.Cmd
 		m.Collections, cmd = m.Collections.Update(tea.WindowSizeMsg{Width: m.Width, Height: m.Height})
