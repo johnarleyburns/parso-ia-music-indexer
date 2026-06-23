@@ -20,6 +20,21 @@ type Collection struct {
 	LastCursor      string
 	ErrorMessage    string
 	LastSyncedAt    string
+	SourceType      string
+	ListName        string
+	ParentID        string
+}
+
+func (c Collection) IAURL() string {
+	if c.SourceType == "playlist" || c.SourceType == "simplelist" {
+		if c.ParentID != "" {
+			return "https://archive.org/details/" + c.ParentID
+		}
+	}
+	if c.URL != "" {
+		return c.URL
+	}
+	return "https://archive.org/details/" + c.CollectionID
 }
 
 type CollectionInsert struct {
@@ -31,6 +46,9 @@ type CollectionInsert struct {
 	URL           string
 	Query         string
 	ExpectedCount int
+	SourceType    string
+	ListName      string
+	ParentID      string
 }
 
 type CollectionStats struct {
@@ -43,9 +61,9 @@ type CollectionStats struct {
 
 func InsertCollection(db *sql.DB, c CollectionInsert) error {
 	_, err := db.Exec(
-		`INSERT OR IGNORE INTO collections(collection_id, title, description, category, curator, url, query, expected_count)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.CollectionID, c.Title, c.Description, c.Category, c.Curator, c.URL, c.Query, c.ExpectedCount,
+		`INSERT OR IGNORE INTO collections(collection_id, title, description, category, curator, url, query, expected_count, source_type, list_name, parent_id)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.CollectionID, c.Title, c.Description, c.Category, c.Curator, c.URL, c.Query, c.ExpectedCount, c.SourceType, c.ListName, c.ParentID,
 	)
 	return err
 }
@@ -58,8 +76,8 @@ func BulkInsertCollections(db *sql.DB, collections []CollectionInsert) (int64, e
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(
-		`INSERT OR IGNORE INTO collections(collection_id, title, description, category, curator, url, query, expected_count)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR IGNORE INTO collections(collection_id, title, description, category, curator, url, query, expected_count, source_type, list_name, parent_id)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("prepare: %w", err)
@@ -68,7 +86,7 @@ func BulkInsertCollections(db *sql.DB, collections []CollectionInsert) (int64, e
 
 	var inserted int64
 	for _, c := range collections {
-		res, err := stmt.Exec(c.CollectionID, c.Title, c.Description, c.Category, c.Curator, c.URL, c.Query, c.ExpectedCount)
+		res, err := stmt.Exec(c.CollectionID, c.Title, c.Description, c.Category, c.Curator, c.URL, c.Query, c.ExpectedCount, c.SourceType, c.ListName, c.ParentID)
 		if err != nil {
 			return inserted, fmt.Errorf("insert %s: %w", c.CollectionID, err)
 		}
@@ -107,7 +125,8 @@ func GetAllCollections(db *sql.DB) ([]Collection, error) {
 		`SELECT collection_id, title, COALESCE(description,''), COALESCE(category,''),
 		        COALESCE(curator,''), COALESCE(url,''), query, expected_count,
 		        discovered_count, status, COALESCE(last_cursor,''),
-		        COALESCE(error_message,''), COALESCE(last_synced_at,'')
+		        COALESCE(error_message,''), COALESCE(last_synced_at,''),
+		        COALESCE(source_type,'collection'), COALESCE(list_name,''), COALESCE(parent_id,'')
 		 FROM collections ORDER BY title`,
 	)
 	if err != nil {
@@ -123,6 +142,7 @@ func GetAllCollections(db *sql.DB) ([]Collection, error) {
 			&c.Curator, &c.URL, &c.Query, &c.ExpectedCount,
 			&c.DiscoveredCount, &c.Status, &c.LastCursor,
 			&c.ErrorMessage, &c.LastSyncedAt,
+			&c.SourceType, &c.ListName, &c.ParentID,
 		); err != nil {
 			return nil, err
 		}
@@ -136,7 +156,8 @@ func GetPendingCollections(db *sql.DB) ([]Collection, error) {
 		`SELECT collection_id, title, COALESCE(description,''), COALESCE(category,''),
 		        COALESCE(curator,''), COALESCE(url,''), query, expected_count,
 		        discovered_count, status, COALESCE(last_cursor,''),
-		        COALESCE(error_message,''), COALESCE(last_synced_at,'')
+		        COALESCE(error_message,''), COALESCE(last_synced_at,''),
+		        COALESCE(source_type,'collection'), COALESCE(list_name,''), COALESCE(parent_id,'')
 		 FROM collections WHERE status IN ('pending','discovering') ORDER BY expected_count`,
 	)
 	if err != nil {
@@ -152,6 +173,7 @@ func GetPendingCollections(db *sql.DB) ([]Collection, error) {
 			&c.Curator, &c.URL, &c.Query, &c.ExpectedCount,
 			&c.DiscoveredCount, &c.Status, &c.LastCursor,
 			&c.ErrorMessage, &c.LastSyncedAt,
+			&c.SourceType, &c.ListName, &c.ParentID,
 		); err != nil {
 			return nil, err
 		}

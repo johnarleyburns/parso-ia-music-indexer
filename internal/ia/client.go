@@ -39,7 +39,7 @@ func DoWithRetry(ctx context.Context, client *http.Client, req *http.Request) (*
 			continue
 		}
 
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+		if isRetryableStatus(resp.StatusCode) {
 			resp.Body.Close()
 			wait := backoffs[attempt]
 			if ra := resp.Header.Get("Retry-After"); ra != "" {
@@ -68,6 +68,18 @@ func DoWithRetry(ctx context.Context, client *http.Client, req *http.Request) (*
 	}
 
 	return nil, fmt.Errorf("exhausted retries: %w", lastErr)
+}
+
+func isRetryableStatus(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	}
+	return false
 }
 
 func parseRetryAfter(s string) time.Duration {

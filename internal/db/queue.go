@@ -106,7 +106,7 @@ func ClaimUntaggedAlbum(db *sql.DB) (*UntaggedAlbum, error) {
 			 INNER JOIN track_embeddings e ON t.id = e.track_id
 			 WHERE t.album_id = a.ia_identifier AND t.status = 'completed' AND (t.tags IS NULL OR t.tags = ''))
 		FROM albums a
-		WHERE a.status = 'resolved'
+		WHERE (a.status = 'resolved' OR a.status = 'unavailable')
 		  AND EXISTS (
 			SELECT 1 FROM tracks t
 			INNER JOIN track_embeddings e ON t.id = e.track_id

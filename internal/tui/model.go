@@ -296,6 +296,18 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.Collections, cmd = m.Collections.Update(msg)
 		return m, cmd
+
+	case playlistProgressMsg:
+		log.Printf("[collections] MainModel.Update: received playlistProgressMsg, routing to Collections.Update")
+		var cmd tea.Cmd
+		m.Collections, cmd = m.Collections.Update(msg)
+		return m, cmd
+
+	case SwitchToBrowseMsg:
+		m.ActiveTab = 2
+		var cmd tea.Cmd
+		m.Browse, cmd = m.Browse.SearchForCollection(msg.Query)
+		return m, cmd
 	}
 
 	var cmd tea.Cmd

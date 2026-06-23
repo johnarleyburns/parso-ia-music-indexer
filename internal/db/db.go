@@ -59,6 +59,9 @@ func (db *DB) migrate() error {
 			last_cursor      TEXT,
 			error_message    TEXT,
 			last_synced_at   TEXT,
+			source_type      TEXT NOT NULL DEFAULT 'collection',
+			list_name        TEXT,
+			parent_id        TEXT,
 			created_at       TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
@@ -191,6 +194,24 @@ func (db *DB) migrateSchemaChanges() error {
 	if tableExists(db.Conn, "tracks") && !columnExists(db.Conn, "tracks", "tags") {
 		if _, err := db.Conn.Exec("ALTER TABLE tracks ADD COLUMN tags TEXT"); err != nil {
 			return fmt.Errorf("add tags column: %w", err)
+		}
+	}
+
+	if tableExists(db.Conn, "collections") && !columnExists(db.Conn, "collections", "source_type") {
+		if _, err := db.Conn.Exec("ALTER TABLE collections ADD COLUMN source_type TEXT NOT NULL DEFAULT 'collection'"); err != nil {
+			return fmt.Errorf("add source_type column: %w", err)
+		}
+	}
+
+	if tableExists(db.Conn, "collections") && !columnExists(db.Conn, "collections", "list_name") {
+		if _, err := db.Conn.Exec("ALTER TABLE collections ADD COLUMN list_name TEXT"); err != nil {
+			return fmt.Errorf("add list_name column: %w", err)
+		}
+	}
+
+	if tableExists(db.Conn, "collections") && !columnExists(db.Conn, "collections", "parent_id") {
+		if _, err := db.Conn.Exec("ALTER TABLE collections ADD COLUMN parent_id TEXT"); err != nil {
+			return fmt.Errorf("add parent_id column: %w", err)
 		}
 	}
 

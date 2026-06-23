@@ -35,7 +35,7 @@ func isTransientError(errMsg string) bool {
 		"stream:", "rate limit:", "clap:",
 		"timeout", "connection refused", "connection reset",
 		"i/o timeout", "no such host", "EOF",
-		"503", "429", "502", "504",
+		"503", "429", "502", "500", "504",
 	}
 	lower := strings.ToLower(errMsg)
 	for _, pattern := range transient {
@@ -354,6 +354,17 @@ func coordinatorLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activit
 			}
 			return
 		default:
+		}
+
+		if coll.SourceType == "playlist" {
+			events <- tui.ActivityEvent{
+				Type:         tui.EventInfo,
+				Timestamp:    time.Now(),
+				CollectionID: coll.CollectionID,
+				Message:      fmt.Sprintf("[%d/%d] Skipping playlist %q (items already imported)", i+1, len(collections), coll.Title),
+			}
+			db.MarkCollectionDiscovered(sqlDB.Conn, coll.CollectionID, coll.DiscoveredCount)
+			continue
 		}
 
 		discovered, err := discoverCollection(cfg, sqlDB, client, iaLimiter, events, stopCh, coll, i+1, len(collections), denylist)
@@ -925,6 +936,27 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 				WorkerID:   workerID,
 				Message:    fmt.Sprintf("[%s] Album access-restricted %s: %v (%d pending tracks unavailable)", workerID, track.AlbumID, err, skipped),
 				Error:      err.Error(),
+			}
+		} else if isTransientError(errMsg) {
+			requeued, _ := db.RequeueTrackForRetry(sqlDB.Conn, track.ID, 3, errMsg)
+			dbMu.Unlock()
+			if requeued {
+				events <- tui.ActivityEvent{
+					Type:       tui.EventInfo,
+					Timestamp:  time.Now(),
+					Identifier: trackLabel,
+					WorkerID:   workerID,
+					Message:    fmt.Sprintf("[%s] Requeued %s: %v", workerID, trackLabel, err),
+				}
+			} else {
+				events <- tui.ActivityEvent{
+					Type:       tui.EventAnalysisFailed,
+					Timestamp:  time.Now(),
+					Identifier: trackLabel,
+					WorkerID:   workerID,
+					Message:    fmt.Sprintf("[%s] Failed %s (max retries): %v", workerID, trackLabel, err),
+					Error:      err.Error(),
+				}
 			}
 		} else {
 			db.MarkTrackFailed(sqlDB.Conn, track.ID, errMsg)

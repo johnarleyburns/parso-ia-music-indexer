@@ -19,6 +19,7 @@ type Config struct {
 	SearchText          string
 	LibrivoxDenylistPath string
 	SeedCollections      bool
+	IAParent             string
 }
 
 func Parse() *Config {
@@ -36,6 +37,7 @@ func Parse() *Config {
 	flag.StringVar(&cfg.SearchText, "search-text", "", "Search indexed tracks by text query (CLAP text-to-audio)")
 	flag.StringVar(&cfg.LibrivoxDenylistPath, "librivox-denylist", envOrDefault("LIBRIVOX_DENYLIST", "data/librivox_denylist.json"), "Path to LibriVox denylist JSON file")
 	flag.BoolVar(&cfg.SeedCollections, "seed-collections", false, "Seed all collections from embedded JSON (INSERT OR IGNORE)")
+	flag.StringVar(&cfg.IAParent, "parent", envOrDefault("IA_PARENT", ""), "IA parent collection for playlists (default: fav-{username} from ia.ini)")
 	flag.Parse()
 
 	return cfg

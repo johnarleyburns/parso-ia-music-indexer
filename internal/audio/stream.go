@@ -55,18 +55,11 @@ func StreamAudioFromURL(ctx context.Context, client *http.Client, mp3URL string,
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("User-Agent", "ParsoIAIndexer/1.0")
 
 	logDebug("=== REQUEST %s ===", time.Now().Format(time.RFC3339))
 	logDebug("  URL: %s", mp3URL)
-	logDebug("  User-Agent: %s", req.Header.Get("User-Agent"))
-	for k, v := range req.Header {
-		if k != "User-Agent" && k != "Range" {
-			logDebug("  %s: %v", k, v)
-		}
-	}
 
-	resp, err := client.Do(req)
+	resp, err := ia.DoWithRetry(ctx, client, req)
 	if err != nil {
 		logDebug("  ERROR: %v", err)
 		return nil, fmt.Errorf("download: %w", err)
@@ -74,13 +67,8 @@ func StreamAudioFromURL(ctx context.Context, client *http.Client, mp3URL string,
 	defer resp.Body.Close()
 
 	logDebug("  STATUS: %d %s", resp.StatusCode, resp.Status)
-	for k, v := range resp.Header {
-		logDebug("  RESP %s: %v", k, v)
-	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		bodyPrefix, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		logDebug("  BODY (1KB): %s", string(bodyPrefix))
 		return nil, fmt.Errorf("unexpected status %d for %s", resp.StatusCode, mp3URL)
 	}
 	logDebug("  OK — streaming %d bytes", maxBytes)

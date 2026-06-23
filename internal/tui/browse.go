@@ -545,6 +545,16 @@ func (m BrowseModel) Activate() (BrowseModel, tea.Cmd) {
 	return m, nil
 }
 
+func (m BrowseModel) SearchForCollection(query string) (BrowseModel, tea.Cmd) {
+	m.mode = ModeAlbums
+	m.similarityMode = false
+	m.inputFocused = true
+	m.lastQuery = query
+	m.page = 0
+	m.searchInput.SetValue(query)
+	return m, tea.Batch(m.searchInput.Focus(), m.doAlbumSearch(query))
+}
+
 func (m BrowseModel) View() tea.View {
 	if m.Width == 0 {
 		return tea.NewView("loading...")
