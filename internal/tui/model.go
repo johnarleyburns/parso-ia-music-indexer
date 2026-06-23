@@ -191,12 +191,20 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	collectionsInputActive := m.ActiveTab == 4 && m.Collections.InputFocused()
+
 		switch {
 		case key.Matches(msg, m.Keys.NextTab):
+			if collectionsInputActive {
+				break
+			}
 			prevTab := m.ActiveTab
 			m.ActiveTab = (m.ActiveTab + 1) % len(m.Tabs)
 			return m, m.onTabSwitch(prevTab, m.ActiveTab)
 		case key.Matches(msg, m.Keys.PrevTab):
+			if collectionsInputActive {
+				break
+			}
 			prevTab := m.ActiveTab
 			m.ActiveTab = (m.ActiveTab - 1 + len(m.Tabs)) % len(m.Tabs)
 			return m, m.onTabSwitch(prevTab, m.ActiveTab)

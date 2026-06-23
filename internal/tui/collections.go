@@ -153,6 +153,13 @@ func (m CollectionsModel) Init() tea.Cmd {
 	return m.doRefresh()
 }
 
+func (m CollectionsModel) InputFocused() bool {
+	return m.mode == colModeAddCollection ||
+		m.mode == colModeCreatePlaylist ||
+		m.mode == colModeImportPlaylist ||
+		m.mode == colModeImportByURL
+}
+
 func (m CollectionsModel) Update(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
