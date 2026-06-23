@@ -219,25 +219,41 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "w":
 				m.Controls <- ControlCmd{Action: CmdAddWorker}
 				return m, nil
-		case "W":
-			m.Controls <- ControlCmd{Action: CmdRemoveWorker}
-			return m, nil
-		case "c":
-			m.Controls <- ControlCmd{Action: CmdAddCleaner}
-			return m, nil
-		case "C":
-			m.Controls <- ControlCmd{Action: CmdRemoveCleaner}
-			return m, nil
-		case "e":
-			m.Controls <- ControlCmd{Action: CmdAddEnhancer}
-			return m, nil
-		case "E":
-			m.Controls <- ControlCmd{Action: CmdRemoveEnhancer}
-			return m, nil
-		case "F":
+			case "W":
+				m.Controls <- ControlCmd{Action: CmdRemoveWorker}
+				return m, nil
+			case "c":
+				m.Controls <- ControlCmd{Action: CmdAddCleaner}
+				return m, nil
+			case "C":
+				m.Controls <- ControlCmd{Action: CmdRemoveCleaner}
+				return m, nil
+			case "e":
+				m.Controls <- ControlCmd{Action: CmdAddEnhancer}
+				return m, nil
+			case "E":
+				m.Controls <- ControlCmd{Action: CmdRemoveEnhancer}
+				return m, nil
+			case "F":
 				m.Controls <- ControlCmd{Action: CmdResetFailed}
 				return m, nil
 			}
+		}
+
+		if m.ActiveTab == 2 {
+			var cmd tea.Cmd
+			m.Browse, cmd = m.Browse.Update(msg)
+			return m, cmd
+		}
+		if m.ActiveTab == 3 {
+			var cmd tea.Cmd
+			m.Player, cmd = m.Player.Update(msg)
+			return m, cmd
+		}
+		if m.ActiveTab == 4 {
+			var cmd tea.Cmd
+			m.Collections, cmd = m.Collections.Update(msg)
+			return m, cmd
 		}
 
 	case SwitchToPlayerMsg:
