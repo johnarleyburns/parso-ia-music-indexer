@@ -522,7 +522,7 @@ func (m CollectionsModel) viewList() string {
 	errorStyle := lipgloss.NewStyle().Foreground(Danger)
 	urlStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#06b6d4")).Underline(true)
 
-	s := titleStyle.Render("Collections & Playlists") + "\n\n"
+	s := titleStyle.Render("Collections & Playlists") + "\n"
 
 	if !m.loaded {
 		s += emptyStyle.Render("  Loading...")
@@ -544,12 +544,12 @@ func (m CollectionsModel) viewList() string {
 					if maxW < 20 {
 						maxW = 20
 					}
-					s += "\n\n  " + urlStyle.MaxWidth(maxW).Render(url)
+					s += "\n  " + urlStyle.MaxWidth(maxW).Render(url)
 				}
 			}
 	}
 
-	s += "\n\n" + helpStyle.Render("  [c] add source  [v] view in browse  [o] open URL  [d] delete  [r] refresh  [↑/↓] navigate")
+	s += "\n" + helpStyle.Render("  [c] add source  [v] view in browse  [o] open URL  [d] delete  [r] refresh  [↑/↓] navigate")
 	return s
 }
 
