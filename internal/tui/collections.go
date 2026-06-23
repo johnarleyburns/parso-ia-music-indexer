@@ -29,6 +29,7 @@ const (
 	colModeAddCollection
 	colModeCreatePlaylist
 	colModeImportPlaylist
+	colModeImportByURL
 	colModeDeleteConfirm
 	colModeProgress
 )
@@ -77,6 +78,10 @@ type CollectionsModel struct {
 	importTitle  textinput.Model
 	imField      int
 
+	importURL      textinput.Model
+	importURLTitle textinput.Model
+	urlField       int
+
 	deleteTarget    string
 	deleteTitle     string
 	selectedURL     string
@@ -118,6 +123,10 @@ func NewCollectionsModel(sqlDB *sql.DB) CollectionsModel {
 	imList := ti("list name on IA (e.g. favorites)")
 	imTitle := ti("display title")
 
+	urlInput := ti("playlist URL (e.g. https://archive.org/details/@user/lists/3/name)")
+	urlInput.SetWidth(70)
+	urlTitle := ti("display title (optional)")
+
 	t := newTable(collectionsColumns())
 	t.SetHeight(10)
 
@@ -135,6 +144,8 @@ func NewCollectionsModel(sqlDB *sql.DB) CollectionsModel {
 		importParent:   imParent,
 		importList:     imList,
 		importTitle:    imTitle,
+		importURL:      urlInput,
+		importURLTitle: urlTitle,
 	}
 }
 
@@ -166,6 +177,8 @@ func (m CollectionsModel) Update(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 		return m.updateCreatePlaylist(msg)
 	case colModeImportPlaylist:
 		return m.updateImportPlaylist(msg)
+	case colModeImportByURL:
+		return m.updateImportByURL(msg)
 	case colModeDeleteConfirm:
 		return m.updateDeleteConfirm(msg)
 	case colModeProgress:
@@ -281,6 +294,13 @@ func (m CollectionsModel) updateSourceSelect(msg tea.Msg) (CollectionsModel, tea
 			m.importTitle.SetValue("")
 			m.imField = 0
 			m.importParent.Focus()
+			return m, nil
+		case "u":
+			m.mode = colModeImportByURL
+			m.importURL.SetValue("")
+			m.importURLTitle.SetValue("")
+			m.urlField = 0
+			m.importURL.Focus()
 			return m, nil
 		case "esc":
 			m.mode = colModeView
@@ -454,6 +474,53 @@ func (m CollectionsModel) updateImportPlaylist(msg tea.Msg) (CollectionsModel, t
 	return m, tea.Batch(cmds...)
 }
 
+func (m CollectionsModel) updateImportByURL(msg tea.Msg) (CollectionsModel, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "esc":
+			m.mode = colModeView
+			return m, nil
+		case "tab":
+			m.urlField = (m.urlField + 1) % 2
+			m.importURL.Blur()
+			m.importURLTitle.Blur()
+			switch m.urlField {
+			case 0:
+				m.importURL.Focus()
+			case 1:
+				m.importURLTitle.Focus()
+			}
+			return m, nil
+		case "enter":
+			rawURL := strings.TrimSpace(m.importURL.Value())
+			title := strings.TrimSpace(m.importURLTitle.Value())
+			parent, listName := parsePlaylistURL(rawURL)
+			if parent == "" || listName == "" {
+				return m, nil
+			}
+			if title == "" {
+				title = listName
+			}
+			m.mode = colModeProgress
+			m.progressState = "Starting import..."
+			m.progressCurrent = 0
+			m.progressTotal = 0
+			m.progressErr = nil
+			return m, m.doImportPlaylist(parent, listName, title)
+		}
+	}
+
+	var cmds []tea.Cmd
+	var cmd tea.Cmd
+	m.importURL, cmd = m.importURL.Update(msg)
+	cmds = append(cmds, cmd)
+	m.importURLTitle, cmd = m.importURLTitle.Update(msg)
+	cmds = append(cmds, cmd)
+
+	return m, tea.Batch(cmds...)
+}
+
 func (m CollectionsModel) updateProgress(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case playlistProgressMsg:
@@ -506,6 +573,8 @@ func (m CollectionsModel) View() tea.View {
 		return tea.NewView(m.viewCreatePlaylist())
 	case colModeImportPlaylist:
 		return tea.NewView(m.viewImportPlaylist())
+	case colModeImportByURL:
+		return tea.NewView(m.viewImportByURL())
 	case colModeDeleteConfirm:
 		return tea.NewView(m.viewDeleteConfirm())
 	case colModeProgress:
@@ -560,7 +629,8 @@ func (m CollectionsModel) viewSourceSelect() string {
 	s := titleStyle.Render("Add Source") + "\n\n"
 	s += "  [a] Add IA Collection (discover from scrape)\n"
 	s += "  [s] Create Playlist from Search\n"
-	s += "  [i] Import Existing Playlist from IA\n\n"
+	s += "  [i] Import Existing Playlist from IA\n"
+	s += "  [u] Import Playlist by URL\n\n"
 	s += helpStyle.Render("  [esc] cancel")
 	return s
 }
@@ -606,6 +676,20 @@ func (m CollectionsModel) viewImportPlaylist() string {
 	s += labelStyle.Render("  Parent: ") + m.importParent.View() + "\n"
 	s += labelStyle.Render("  List:   ") + m.importList.View() + "\n"
 	s += labelStyle.Render("  Title:  ") + m.importTitle.View() + "\n\n"
+
+	s += helpStyle.Render("  [tab] next field  [enter] import  [esc] cancel")
+	return s
+}
+
+func (m CollectionsModel) viewImportByURL() string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(Success).MarginBottom(1)
+	labelStyle := lipgloss.NewStyle().Foreground(Secondary)
+	helpStyle := lipgloss.NewStyle().Foreground(Muted)
+
+	s := titleStyle.Render("Import Playlist by URL") + "\n\n"
+
+	s += labelStyle.Render("  URL:   ") + m.importURL.View() + "\n"
+	s += labelStyle.Render("  Title: ") + m.importURLTitle.View() + "\n\n"
 
 	s += helpStyle.Render("  [tab] next field  [enter] import  [esc] cancel")
 	return s
@@ -764,6 +848,62 @@ func collectionsColumns() []table.Column {
 		{Title: "Items", Width: 8},
 		{Title: "Status", Width: 10},
 	}
+}
+
+func parsePlaylistURL(rawURL string) (parentID, listName string) {
+	u := strings.TrimSpace(rawURL)
+	u = strings.TrimPrefix(u, "https://")
+	u = strings.TrimPrefix(u, "http://")
+	u = strings.TrimPrefix(u, "archive.org/details/")
+
+	parts := strings.Split(u, "/")
+	var user string
+	for i, p := range parts {
+		if strings.HasPrefix(p, "@") {
+			user = p
+			if i+1 < len(parts) {
+				rest := parts[i+1:]
+				for j, r := range rest {
+					if r == "lists" && j+2 < len(rest) {
+						listName = rest[j+2]
+						break
+					}
+				}
+			}
+			break
+		}
+	}
+	if strings.HasPrefix(listName, "@") || listName == "lists" || listName == "" {
+		parts := strings.Split(u, "/")
+		var foundUser bool
+		var foundLists bool
+		for _, p := range parts {
+			if strings.HasPrefix(p, "@") {
+				user = p
+				foundUser = true
+			} else if foundUser && p == "lists" {
+				foundLists = true
+			} else if foundLists && isNumeric(p) {
+				continue
+			} else if foundLists && p != "" {
+				listName = p
+				break
+			}
+		}
+	}
+	if user == "" || listName == "" {
+		return "", ""
+	}
+	return user, listName
+}
+
+func isNumeric(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
 }
 
 func openBrowser(url string) {
