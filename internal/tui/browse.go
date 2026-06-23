@@ -546,13 +546,14 @@ func (m BrowseModel) Activate() (BrowseModel, tea.Cmd) {
 }
 
 func (m BrowseModel) SearchForCollection(query string) (BrowseModel, tea.Cmd) {
+	searchQuery := strings.TrimPrefix(query, "collection:")
 	m.mode = ModeAlbums
 	m.similarityMode = false
 	m.inputFocused = true
-	m.lastQuery = query
+	m.lastQuery = searchQuery
 	m.page = 0
-	m.searchInput.SetValue(query)
-	return m, tea.Batch(m.searchInput.Focus(), m.doAlbumSearch(query))
+	m.searchInput.SetValue(searchQuery)
+	return m, tea.Batch(m.searchInput.Focus(), m.doAlbumSearch(searchQuery))
 }
 
 func (m BrowseModel) View() tea.View {
