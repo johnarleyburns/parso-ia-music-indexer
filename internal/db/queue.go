@@ -616,6 +616,19 @@ func ResetStuckTracks(db *sql.DB, maxAge time.Duration) (int64, error) {
 	return result.RowsAffected()
 }
 
+func ResetStuckAlbums(db *sql.DB, maxAge time.Duration) (int64, error) {
+	cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339)
+	result, err := db.Exec(
+		`UPDATE albums SET status='pending', error_message='stuck resolving (reset)', retry_count=0, updated_at=datetime('now')
+		 WHERE status='resolving' AND updated_at < ?`,
+		cutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func RequeueTrackForRetry(db *sql.DB, trackID int, maxRetries int, errMsg string) (bool, error) {
 	var retryCount int
 	err := db.QueryRow(`SELECT retry_count FROM tracks WHERE id = ?`, trackID).Scan(&retryCount)

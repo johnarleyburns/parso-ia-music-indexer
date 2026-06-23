@@ -3,6 +3,7 @@ package tui
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/db"
@@ -32,9 +33,10 @@ type CollectionsModel struct {
 	Width  int
 	Height int
 
-	mode    collectionsMode
-	table   table.Model
-	loaded  bool
+	mode         collectionsMode
+	table        table.Model
+	loaded       bool
+	refreshError string
 
 	addID    textinput.Model
 	addTitle textinput.Model
@@ -97,7 +99,12 @@ func (m CollectionsModel) Update(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 func (m CollectionsModel) updateView(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case collectionsRefreshMsg:
-		if msg.Err == nil {
+		log.Printf("[collections] updateView: received collectionsRefreshMsg, err=%v, count=%d", msg.Err, len(msg.Collections))
+		if msg.Err != nil {
+			m.refreshError = msg.Err.Error()
+			m.loaded = true
+		} else {
+			m.refreshError = ""
 			rows := make([]table.Row, len(msg.Collections))
 			for i, c := range msg.Collections {
 				rows[i] = table.Row{
@@ -109,6 +116,7 @@ func (m CollectionsModel) updateView(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 				}
 			}
 			m.table.SetRows(rows)
+			log.Printf("[collections] updateView: table.SetRows called with %d rows, table.Rows()=%d", len(rows), len(m.table.Rows()))
 			m.loaded = true
 		}
 		return m, nil
@@ -233,22 +241,35 @@ func (m CollectionsModel) View() tea.View {
 }
 
 func (m CollectionsModel) viewList() string {
+	log.Printf("[collections] viewList: loaded=%v, refreshError=%q, tableRows=%d", m.loaded, m.refreshError, len(m.table.Rows()))
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(Primary).MarginBottom(1)
 	helpStyle := lipgloss.NewStyle().Foreground(Secondary)
 	emptyStyle := lipgloss.NewStyle().Foreground(Muted).Italic(true)
+	errorStyle := lipgloss.NewStyle().Foreground(Danger)
 
 	s := titleStyle.Render("Collections") + "\n\n"
 
 	if !m.loaded {
 		s += emptyStyle.Render("  Loading...")
+	} else if m.refreshError != "" {
+		s += errorStyle.Render("  Error: " + m.refreshError)
 	} else if len(m.table.Rows()) == 0 {
 		s += emptyStyle.Render("  No collections. Press a to add one.")
 	} else {
-		s += m.table.View()
+		tv := m.table.View()
+		log.Printf("[collections] viewList: table.View() returns %d bytes, first 200 chars: %q", len(tv), safePrefix(tv, 200))
+		s += tv
 	}
 
-	s += "\n\n" + helpStyle.Render("  [a] add  [d] delete  [r] refresh  [\u2191/\u2193] navigate")
+	s += "\n\n" + helpStyle.Render("  [a] add  [d] delete  [r] refresh  [↑/↓] navigate")
 	return s
+}
+
+func safePrefix(s string, n int) string {
+	if len(s) < n {
+		n = len(s)
+	}
+	return s[:n]
 }
 
 func (m CollectionsModel) viewAdd() string {
@@ -281,7 +302,9 @@ func (m CollectionsModel) viewDeleteConfirm() string {
 func (m CollectionsModel) doRefresh() tea.Cmd {
 	dbConn := m.DB
 	return func() tea.Msg {
+		log.Printf("[collections] doRefresh: querying DB for all collections")
 		collections, err := db.GetAllCollections(dbConn)
+		log.Printf("[collections] doRefresh: got %d collections, err=%v", len(collections), err)
 		return collectionsRefreshMsg{Collections: collections, Err: err}
 	}
 }

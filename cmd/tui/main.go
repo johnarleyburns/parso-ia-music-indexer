@@ -271,13 +271,21 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 
 		case <-stuckTicker.C:
 			dbMu.Lock()
-			resetCount, err := db.ResetStuckTracks(sqlDB.Conn, stuckTrackAge)
+			resetTracks, errT := db.ResetStuckTracks(sqlDB.Conn, stuckTrackAge)
+			resetAlbums, errA := db.ResetStuckAlbums(sqlDB.Conn, stuckTrackAge)
 			dbMu.Unlock()
-			if err == nil && resetCount > 0 {
+			if errT == nil && resetTracks > 0 {
 				events <- tui.ActivityEvent{
 					Type:      tui.EventInfo,
 					Timestamp: time.Now(),
-					Message:   fmt.Sprintf("Reset %d stuck tracks back to pending", resetCount),
+					Message:   fmt.Sprintf("Reset %d stuck tracks back to pending", resetTracks),
+				}
+			}
+			if errA == nil && resetAlbums > 0 {
+				events <- tui.ActivityEvent{
+					Type:      tui.EventInfo,
+					Timestamp: time.Now(),
+					Message:   fmt.Sprintf("Reset %d stuck albums back to pending", resetAlbums),
 				}
 			}
 		}
@@ -660,7 +668,6 @@ func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEven
 	iaLimiter *ratelimit.Limiter, bwLimiter *rate.Limiter) {
 	batchSize := 2
 	consecutiveFailures := 0
-	const maxConsecutiveFailures = 5
 
 	for {
 		select {
@@ -669,21 +676,20 @@ func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEven
 		default:
 		}
 
-		if consecutiveFailures >= maxConsecutiveFailures {
-			events <- tui.ActivityEvent{
-				Type:      tui.EventWorkerStopped,
-				Timestamp: time.Now(),
-				WorkerID:  workerID,
-				Message:   fmt.Sprintf("[%s] Stopped: %d consecutive transient failures (possible rate limiting)", workerID, consecutiveFailures),
-				Error:     fmt.Sprintf("%d consecutive failures", consecutiveFailures),
-			}
-			return
-		}
-
 		if consecutiveFailures > 0 {
 			backoff := time.Duration(1<<uint(consecutiveFailures-1)) * 5 * time.Second
-			if backoff > 80*time.Second {
-				backoff = 80 * time.Second
+			if backoff > 1*time.Hour {
+				backoff = 1 * time.Hour
+			}
+			if backoff >= 1*time.Hour {
+				events <- tui.ActivityEvent{
+					Type:      tui.EventWorkerStopped,
+					Timestamp: time.Now(),
+					WorkerID:  workerID,
+					Message:   fmt.Sprintf("[%s] Stopped: %d consecutive transient failures (backoff reached 1 hour limit)", workerID, consecutiveFailures),
+					Error:     fmt.Sprintf("%d consecutive failures", consecutiveFailures),
+				}
+				return
 			}
 			events <- tui.ActivityEvent{
 				Type:      tui.EventInfo,

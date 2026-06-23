@@ -3,6 +3,7 @@ package tui
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -291,6 +292,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case collectionsRefreshMsg:
+		log.Printf("[collections] MainModel.Update: received collectionsRefreshMsg, routing to Collections.Update")
 		var cmd tea.Cmd
 		m.Collections, cmd = m.Collections.Update(msg)
 		return m, cmd
@@ -393,6 +395,7 @@ func (m *MainModel) onTabSwitch(from, to int) tea.Cmd {
 	if to == 4 {
 		var cmd tea.Cmd
 		m.Collections, cmd = m.Collections.Update(tea.WindowSizeMsg{Width: m.Width, Height: m.Height})
+		log.Printf("[collections] onTabSwitch: switching to tab 4, firing refresh cmd")
 		return tea.Batch(cmd, m.Collections.doRefresh())
 	}
 	return nil
