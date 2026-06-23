@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -29,6 +30,17 @@ const (
 	maxAlbumRetries = 3
 	stuckTrackAge   = 10 * time.Minute
 )
+
+func setupFileLogging(cfg *config.Config) *os.File {
+	logDir := filepath.Dir(cfg.DBPath)
+	os.MkdirAll(logDir, 0755)
+	f, err := os.OpenFile(filepath.Join(logDir, "debug.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil
+	}
+	log.SetOutput(f)
+	return f
+}
 
 func isTransientError(errMsg string) bool {
 	transient := []string{
@@ -655,6 +667,11 @@ func runSeedCollections(cfg *config.Config) {
 
 func main() {
 	cfg := config.Parse()
+
+	logFile := setupFileLogging(cfg)
+	if logFile != nil {
+		defer logFile.Close()
+	}
 
 	if cfg.SeedCollections {
 		runSeedCollections(cfg)
