@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -62,7 +63,7 @@ func safeGo(fn func(), events chan<- tui.ActivityEvent, label string) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("PANIC in goroutine %q: %v", label, r)
+				log.Printf("PANIC in goroutine %q: %v\n%s", label, r, debug.Stack())
 				events <- tui.ActivityEvent{
 					Type:      tui.EventInfo,
 					Timestamp: time.Now(),
@@ -386,13 +387,14 @@ func coordinatorLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activit
 		}
 
 		if coll.SourceType == "playlist" {
+			albumCount, _ := db.GetCollectionAlbumCount(sqlDB.Conn, coll.CollectionID)
 			events <- tui.ActivityEvent{
 				Type:         tui.EventInfo,
 				Timestamp:    time.Now(),
 				CollectionID: coll.CollectionID,
-				Message:      fmt.Sprintf("[%d/%d] Skipping playlist %q (items already imported)", i+1, len(collections), coll.Title),
+				Message:      fmt.Sprintf("[%d/%d] Skipping playlist %q (%d items already imported)", i+1, len(collections), coll.Title, albumCount),
 			}
-			db.MarkCollectionDiscovered(sqlDB.Conn, coll.CollectionID, coll.DiscoveredCount)
+			db.MarkCollectionDiscovered(sqlDB.Conn, coll.CollectionID, albumCount)
 			continue
 		}
 

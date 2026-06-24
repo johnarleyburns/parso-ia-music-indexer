@@ -99,6 +99,8 @@ func CreateFromSearch(sqlDB *db.DB, iaClient *http.Client, creds *ia.IACredentia
 		log.Printf("[playlist] insert collection warning: %v", insertErr)
 	}
 
+	db.MarkCollectionDiscovered(sqlDB.Conn, collectionID, len(results))
+
 	for i, r := range results {
 		select {
 		case <-time.After(200 * time.Millisecond):
@@ -177,6 +179,8 @@ func ImportExistingPlaylist(sqlDB *db.DB, iaClient *http.Client, input ImportInp
 		log.Printf("[playlist] insert collection warning: %v", insertErr)
 	}
 
+	db.MarkCollectionDiscovered(sqlDB.Conn, collectionID, len(entries))
+
 	onProgress(fmt.Sprintf("Done! %d items imported", len(entries)), len(entries), len(entries))
 
 	return len(entries), nil
@@ -232,6 +236,8 @@ func ImportPatronList(sqlDB *db.DB, iaClient *http.Client, rawURL, title string,
 	if insertErr != nil {
 		log.Printf("[playlist] insert collection warning: %v", insertErr)
 	}
+
+	db.MarkCollectionDiscovered(sqlDB.Conn, collectionID, len(members))
 
 	for i, m := range members {
 		onProgress(fmt.Sprintf("Importing..."), i+1, len(members))

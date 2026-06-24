@@ -41,14 +41,14 @@ func DoWithRetry(ctx context.Context, client *http.Client, req *http.Request) (*
 
 		if isRetryableStatus(resp.StatusCode) {
 			resp.Body.Close()
-			wait := backoffs[attempt]
-			if ra := resp.Header.Get("Retry-After"); ra != "" {
-				if d := parseRetryAfter(ra); d > 0 {
-					wait = d
-				}
-			}
 			lastErr = fmt.Errorf("IA API error: HTTP %d", resp.StatusCode)
 			if attempt < len(backoffs) {
+				wait := backoffs[attempt]
+				if ra := resp.Header.Get("Retry-After"); ra != "" {
+					if d := parseRetryAfter(ra); d > 0 {
+						wait = d
+					}
+				}
 				select {
 				case <-time.After(wait):
 				case <-ctx.Done():
