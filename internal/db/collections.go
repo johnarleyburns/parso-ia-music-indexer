@@ -59,6 +59,11 @@ type CollectionStats struct {
 	Failed      int
 }
 
+type CollectionTrackStat struct {
+	Total    int
+	Analyzed int
+}
+
 func InsertCollection(db *sql.DB, c CollectionInsert) error {
 	_, err := db.Exec(
 		`INSERT OR IGNORE INTO collections(collection_id, title, description, category, curator, url, query, expected_count, source_type, list_name, parent_id)
@@ -216,6 +221,32 @@ func GetCollectionStats(db *sql.DB) (*CollectionStats, error) {
 	return s, rows.Err()
 }
 
+func GetCollectionTrackStats(db *sql.DB) (map[string]CollectionTrackStat, error) {
+	rows, err := db.Query(
+		`SELECT ca.collection_id,
+		        count(t.id) AS total,
+		        count(CASE WHEN t.status='completed' THEN 1 END) AS analyzed
+		 FROM collection_albums ca
+		 JOIN tracks t ON t.album_id = ca.album_id
+		 GROUP BY ca.collection_id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("collection track stats: %w", err)
+	}
+	defer rows.Close()
+
+	stats := make(map[string]CollectionTrackStat)
+	for rows.Next() {
+		var collectionID string
+		var s CollectionTrackStat
+		if err := rows.Scan(&collectionID, &s.Total, &s.Analyzed); err != nil {
+			return nil, err
+		}
+		stats[collectionID] = s
+	}
+	return stats, rows.Err()
+}
+
 func MarkCollectionDiscovering(db *sql.DB, collectionID string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := db.Exec(
@@ -276,6 +307,32 @@ func BulkLinkAlbumsToCollection(sqlDB *sql.DB, collectionID string, albumIDs []s
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO collection_albums(collection_id, album_id) VALUES(?, ?)`)
+	if err != nil {
+		return fmt.Errorf("prepare: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, id := range albumIDs {
+		if _, err := stmt.Exec(collectionID, id); err != nil {
+			return fmt.Errorf("link %s to %s: %w", id, collectionID, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+func ReplaceCollectionAlbums(sqlDB *sql.DB, collectionID string, albumIDs []string) error {
+	tx, err := sqlDB.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM collection_albums WHERE collection_id = ?`, collectionID); err != nil {
+		return fmt.Errorf("clear collection_albums: %w", err)
+	}
 
 	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO collection_albums(collection_id, album_id) VALUES(?, ?)`)
 	if err != nil {

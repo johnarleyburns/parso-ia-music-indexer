@@ -27,8 +27,6 @@ const (
 	colModeView collectionsMode = iota
 	colModeSourceSelect
 	colModeAddCollection
-	colModeCreatePlaylist
-	colModeImportPlaylist
 	colModeImportByURL
 	colModeDeleteConfirm
 	colModeProgress
@@ -36,6 +34,7 @@ const (
 
 type collectionsRefreshMsg struct {
 	Collections []db.Collection
+	Stats       map[string]db.CollectionTrackStat
 	Err         error
 }
 
@@ -61,6 +60,7 @@ type CollectionsModel struct {
 	table        table.Model
 	loaded       bool
 	refreshError string
+	collections  []db.Collection
 
 	addID    textinput.Model
 	addTitle textinput.Model
@@ -68,19 +68,7 @@ type CollectionsModel struct {
 	addCount textinput.Model
 	addField int
 
-	playlistName  textinput.Model
-	playlistQuery textinput.Model
-	playlistLimit textinput.Model
-	plField       int
-
-	importParent textinput.Model
-	importList   textinput.Model
-	importTitle  textinput.Model
-	imField      int
-
-	importURL      textinput.Model
-	importURLTitle textinput.Model
-	urlField       int
+	importURL textinput.Model
 
 	deleteTarget    string
 	deleteTitle     string
@@ -114,38 +102,21 @@ func NewCollectionsModel(sqlDB *sql.DB) CollectionsModel {
 	addCount := ti("expected item count (default: 1000)")
 	addCount.CharLimit = 7
 
-	plName := ti("playlist name (e.g. Gamelan Finds)")
-	plQuery := ti("IA search query (e.g. subject:gamelan mediatype:audio)")
-	plLimit := ti("max items (default: 50)")
-	plLimit.CharLimit = 5
-
-	imParent := ti("parent collection ID (e.g. fav-username)")
-	imList := ti("list name on IA (e.g. favorites)")
-	imTitle := ti("display title")
-
 	urlInput := ti("playlist URL (e.g. https://archive.org/details/@user/lists/3/name)")
 	urlInput.SetWidth(70)
-	urlTitle := ti("display title (optional)")
 
 	t := newTable(collectionsColumns())
 	t.SetHeight(10)
 
 	return CollectionsModel{
-		DB:             sqlDB,
-		mode:           colModeView,
-		table:          t,
-		addID:          addID,
-		addTitle:       addTitle,
-		addQuery:       addQuery,
-		addCount:       addCount,
-		playlistName:   plName,
-		playlistQuery:  plQuery,
-		playlistLimit:  plLimit,
-		importParent:   imParent,
-		importList:     imList,
-		importTitle:    imTitle,
-		importURL:      urlInput,
-		importURLTitle: urlTitle,
+		DB:        sqlDB,
+		mode:      colModeView,
+		table:     t,
+		addID:     addID,
+		addTitle:  addTitle,
+		addQuery:  addQuery,
+		addCount:  addCount,
+		importURL: urlInput,
 	}
 }
 
@@ -155,8 +126,6 @@ func (m CollectionsModel) Init() tea.Cmd {
 
 func (m CollectionsModel) InputFocused() bool {
 	return m.mode == colModeAddCollection ||
-		m.mode == colModeCreatePlaylist ||
-		m.mode == colModeImportPlaylist ||
 		m.mode == colModeImportByURL
 }
 
@@ -180,10 +149,6 @@ func (m CollectionsModel) Update(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 		return m.updateSourceSelect(msg)
 	case colModeAddCollection:
 		return m.updateAddCollection(msg)
-	case colModeCreatePlaylist:
-		return m.updateCreatePlaylist(msg)
-	case colModeImportPlaylist:
-		return m.updateImportPlaylist(msg)
 	case colModeImportByURL:
 		return m.updateImportByURL(msg)
 	case colModeDeleteConfirm:
@@ -204,18 +169,26 @@ func (m CollectionsModel) updateView(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 			m.loaded = true
 		} else {
 			m.refreshError = ""
+			m.collections = msg.Collections
 			rows := make([]table.Row, len(msg.Collections))
 			for i, c := range msg.Collections {
 				source := c.SourceType
 				if source == "" {
 					source = "collection"
 				}
+				st := msg.Stats[c.CollectionID]
+				pct := "-"
+				if st.Total > 0 {
+					pct = fmt.Sprintf("%d%%", st.Analyzed*100/st.Total)
+				}
 				rows[i] = table.Row{
 					c.Title,
 					source,
 					c.IAURL(),
 					c.CollectionID,
-					fmt.Sprintf("%d", c.DiscoveredCount),
+					fmt.Sprintf("%d", st.Total),
+					fmt.Sprintf("%d", st.Analyzed),
+					pct,
 					c.Status,
 				}
 			}
@@ -265,6 +238,20 @@ func (m CollectionsModel) updateView(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 				openBrowser(url)
 			}
 			return m, nil
+		case "s":
+			idx := m.table.Cursor()
+			if idx >= 0 && idx < len(m.collections) {
+				col := m.collections[idx]
+				if col.SourceType == "playlist" || col.SourceType == "simplelist" {
+					m.mode = colModeProgress
+					m.progressState = "Starting sync..."
+					m.progressCurrent = 0
+					m.progressTotal = 0
+					m.progressErr = nil
+					return m, m.doSyncPlaylist(col)
+				}
+			}
+			return m, nil
 		}
 	}
 
@@ -286,27 +273,9 @@ func (m CollectionsModel) updateSourceSelect(msg tea.Msg) (CollectionsModel, tea
 			m.addField = 0
 			m.addID.Focus()
 			return m, nil
-		case "s":
-			m.mode = colModeCreatePlaylist
-			m.playlistName.SetValue("")
-			m.playlistQuery.SetValue("")
-			m.playlistLimit.SetValue("")
-			m.plField = 0
-			m.playlistName.Focus()
-			return m, nil
-		case "i":
-			m.mode = colModeImportPlaylist
-			m.importParent.SetValue("")
-			m.importList.SetValue("")
-			m.importTitle.SetValue("")
-			m.imField = 0
-			m.importParent.Focus()
-			return m, nil
 		case "u":
 			m.mode = colModeImportByURL
 			m.importURL.SetValue("")
-			m.importURLTitle.SetValue("")
-			m.urlField = 0
 			m.importURL.Focus()
 			return m, nil
 		case "esc":
@@ -380,107 +349,6 @@ func (m CollectionsModel) updateAddCollection(msg tea.Msg) (CollectionsModel, te
 	return m, tea.Batch(cmds...)
 }
 
-func (m CollectionsModel) updateCreatePlaylist(msg tea.Msg) (CollectionsModel, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "esc":
-			m.mode = colModeView
-			return m, nil
-		case "tab":
-			m.plField = (m.plField + 1) % 3
-			m.playlistName.Blur()
-			m.playlistQuery.Blur()
-			m.playlistLimit.Blur()
-			switch m.plField {
-			case 0:
-				m.playlistName.Focus()
-			case 1:
-				m.playlistQuery.Focus()
-			case 2:
-				m.playlistLimit.Focus()
-			}
-			return m, nil
-		case "enter":
-			name := strings.TrimSpace(m.playlistName.Value())
-			query := strings.TrimSpace(m.playlistQuery.Value())
-			if name == "" || query == "" {
-				return m, nil
-			}
-			limit := 50
-			if s := strings.TrimSpace(m.playlistLimit.Value()); s != "" {
-				fmt.Sscanf(s, "%d", &limit)
-			}
-			m.mode = colModeProgress
-			m.progressState = "Starting..."
-			m.progressCurrent = 0
-			m.progressTotal = limit
-			m.progressErr = nil
-			return m, m.doCreatePlaylist(name, query, limit)
-		}
-	}
-
-	var cmds []tea.Cmd
-	var cmd tea.Cmd
-	m.playlistName, cmd = m.playlistName.Update(msg)
-	cmds = append(cmds, cmd)
-	m.playlistQuery, cmd = m.playlistQuery.Update(msg)
-	cmds = append(cmds, cmd)
-	m.playlistLimit, cmd = m.playlistLimit.Update(msg)
-	cmds = append(cmds, cmd)
-
-	return m, tea.Batch(cmds...)
-}
-
-func (m CollectionsModel) updateImportPlaylist(msg tea.Msg) (CollectionsModel, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "esc":
-			m.mode = colModeView
-			return m, nil
-		case "tab":
-			m.imField = (m.imField + 1) % 3
-			m.importParent.Blur()
-			m.importList.Blur()
-			m.importTitle.Blur()
-			switch m.imField {
-			case 0:
-				m.importParent.Focus()
-			case 1:
-				m.importList.Focus()
-			case 2:
-				m.importTitle.Focus()
-			}
-			return m, nil
-		case "enter":
-			parent := strings.TrimSpace(m.importParent.Value())
-			listName := strings.TrimSpace(m.importList.Value())
-			title := strings.TrimSpace(m.importTitle.Value())
-			if parent == "" || listName == "" {
-				return m, nil
-			}
-			m.mode = colModeProgress
-			m.progressState = "Starting import..."
-			m.progressCurrent = 0
-			m.progressTotal = 0
-			m.progressErr = nil
-			return m, m.doImportPlaylist(parent, listName, title)
-		}
-	}
-
-	var cmds []tea.Cmd
-	var cmd tea.Cmd
-	m.importParent, cmd = m.importParent.Update(msg)
-	cmds = append(cmds, cmd)
-	m.importList, cmd = m.importList.Update(msg)
-	cmds = append(cmds, cmd)
-	m.importTitle, cmd = m.importTitle.Update(msg)
-	cmds = append(cmds, cmd)
-
-	return m, tea.Batch(cmds...)
-}
-
 func (m CollectionsModel) updateImportByURL(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
@@ -488,43 +356,23 @@ func (m CollectionsModel) updateImportByURL(msg tea.Msg) (CollectionsModel, tea.
 		case "esc":
 			m.mode = colModeView
 			return m, nil
-		case "tab":
-			m.urlField = (m.urlField + 1) % 2
-			m.importURL.Blur()
-			m.importURLTitle.Blur()
-			switch m.urlField {
-			case 0:
-				m.importURL.Focus()
-			case 1:
-				m.importURLTitle.Focus()
-			}
-			return m, nil
 		case "enter":
 			rawURL := strings.TrimSpace(m.importURL.Value())
-			title := strings.TrimSpace(m.importURLTitle.Value())
 			if rawURL == "" {
 				return m, nil
-			}
-			if title == "" {
-				title = rawURL
 			}
 			m.mode = colModeProgress
 			m.progressState = "Starting import..."
 			m.progressCurrent = 0
 			m.progressTotal = 0
 			m.progressErr = nil
-			return m, m.doImportPatronList(rawURL, title)
+			return m, m.doImportPatronList(rawURL)
 		}
 	}
 
-	var cmds []tea.Cmd
 	var cmd tea.Cmd
 	m.importURL, cmd = m.importURL.Update(msg)
-	cmds = append(cmds, cmd)
-	m.importURLTitle, cmd = m.importURLTitle.Update(msg)
-	cmds = append(cmds, cmd)
-
-	return m, tea.Batch(cmds...)
+	return m, cmd
 }
 
 func (m CollectionsModel) updateProgress(msg tea.Msg) (CollectionsModel, tea.Cmd) {
@@ -575,10 +423,6 @@ func (m CollectionsModel) View() tea.View {
 		return tea.NewView(m.viewSourceSelect())
 	case colModeAddCollection:
 		return tea.NewView(m.viewAddCollection())
-	case colModeCreatePlaylist:
-		return tea.NewView(m.viewCreatePlaylist())
-	case colModeImportPlaylist:
-		return tea.NewView(m.viewImportPlaylist())
 	case colModeImportByURL:
 		return tea.NewView(m.viewImportByURL())
 	case colModeDeleteConfirm:
@@ -624,7 +468,7 @@ func (m CollectionsModel) viewList() string {
 			}
 	}
 
-	s += "\n" + helpStyle.Render("  [c] add source  [v] view in browse  [o] open URL  [d] delete  [r] refresh  [↑/↓] navigate")
+	s += "\n" + helpStyle.Render("  [c] add source  [v] view in browse  [o] open URL  [s] sync playlist  [d] delete  [r] refresh  [↑/↓] navigate")
 	return s
 }
 
@@ -634,8 +478,6 @@ func (m CollectionsModel) viewSourceSelect() string {
 
 	s := titleStyle.Render("Add Source") + "\n\n"
 	s += "  [a] Add IA Collection (discover from scrape)\n"
-	s += "  [s] Create Playlist from Search\n"
-	s += "  [i] Import Existing Playlist from IA\n"
 	s += "  [u] Import Playlist by URL\n\n"
 	s += helpStyle.Render("  [esc] cancel")
 	return s
@@ -657,36 +499,6 @@ func (m CollectionsModel) viewAddCollection() string {
 	return s
 }
 
-func (m CollectionsModel) viewCreatePlaylist() string {
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(Success).MarginBottom(1)
-	labelStyle := lipgloss.NewStyle().Foreground(Secondary)
-	helpStyle := lipgloss.NewStyle().Foreground(Muted)
-
-	s := titleStyle.Render("Create Playlist from Search") + "\n\n"
-
-	s += labelStyle.Render("  Name:  ") + m.playlistName.View() + "\n"
-	s += labelStyle.Render("  Query: ") + m.playlistQuery.View() + "\n"
-	s += labelStyle.Render("  Limit: ") + m.playlistLimit.View() + "\n\n"
-
-	s += helpStyle.Render("  [tab] next field  [enter] create  [esc] cancel")
-	return s
-}
-
-func (m CollectionsModel) viewImportPlaylist() string {
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(Success).MarginBottom(1)
-	labelStyle := lipgloss.NewStyle().Foreground(Secondary)
-	helpStyle := lipgloss.NewStyle().Foreground(Muted)
-
-	s := titleStyle.Render("Import Existing Playlist") + "\n\n"
-
-	s += labelStyle.Render("  Parent: ") + m.importParent.View() + "\n"
-	s += labelStyle.Render("  List:   ") + m.importList.View() + "\n"
-	s += labelStyle.Render("  Title:  ") + m.importTitle.View() + "\n\n"
-
-	s += helpStyle.Render("  [tab] next field  [enter] import  [esc] cancel")
-	return s
-}
-
 func (m CollectionsModel) viewImportByURL() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(Success).MarginBottom(1)
 	labelStyle := lipgloss.NewStyle().Foreground(Secondary)
@@ -694,10 +506,10 @@ func (m CollectionsModel) viewImportByURL() string {
 
 	s := titleStyle.Render("Import Playlist by URL") + "\n\n"
 
-	s += labelStyle.Render("  URL:   ") + m.importURL.View() + "\n"
-	s += labelStyle.Render("  Title: ") + m.importURLTitle.View() + "\n\n"
+	s += labelStyle.Render("  URL: ") + m.importURL.View() + "\n\n"
+	s += helpStyle.Render("  Title is taken from the IA playlist name.") + "\n\n"
 
-	s += helpStyle.Render("  [tab] next field  [enter] import  [esc] cancel")
+	s += helpStyle.Render("  [enter] import  [esc] cancel")
 	return s
 }
 
@@ -741,13 +553,25 @@ func (m CollectionsModel) viewDeleteConfirm() string {
 	return s
 }
 
+func loadCollectionsWithStats(dbConn *sql.DB) collectionsRefreshMsg {
+	collections, err := db.GetAllCollections(dbConn)
+	if err != nil {
+		return collectionsRefreshMsg{Err: err}
+	}
+	stats, err := db.GetCollectionTrackStats(dbConn)
+	if err != nil {
+		return collectionsRefreshMsg{Err: err}
+	}
+	return collectionsRefreshMsg{Collections: collections, Stats: stats}
+}
+
 func (m CollectionsModel) doRefresh() tea.Cmd {
 	dbConn := m.DB
 	return func() tea.Msg {
 		log.Printf("[collections] doRefresh: querying DB for all collections")
-		collections, err := db.GetAllCollections(dbConn)
-		log.Printf("[collections] doRefresh: got %d collections, err=%v", len(collections), err)
-		return collectionsRefreshMsg{Collections: collections, Err: err}
+		msg := loadCollectionsWithStats(dbConn)
+		log.Printf("[collections] doRefresh: got %d collections, err=%v", len(msg.Collections), msg.Err)
+		return msg
 	}
 }
 
@@ -757,8 +581,7 @@ func (m CollectionsModel) doInsert(c db.CollectionInsert) tea.Cmd {
 		if err := db.InsertCollection(dbConn, c); err != nil {
 			return collectionsRefreshMsg{Err: err}
 		}
-		collections, err := db.GetAllCollections(dbConn)
-		return collectionsRefreshMsg{Collections: collections, Err: err}
+		return loadCollectionsWithStats(dbConn)
 	}
 }
 
@@ -768,34 +591,21 @@ func (m CollectionsModel) doDelete(collectionID string) tea.Cmd {
 		if err := db.RemoveCollection(dbConn, collectionID); err != nil {
 			return collectionsRefreshMsg{Err: err}
 		}
-		collections, err := db.GetAllCollections(dbConn)
-		return collectionsRefreshMsg{Collections: collections, Err: err}
+		return loadCollectionsWithStats(dbConn)
 	}
 }
 
-func (m CollectionsModel) doCreatePlaylist(name, query string, limit int) tea.Cmd {
+func (m CollectionsModel) doSyncPlaylist(col db.Collection) tea.Cmd {
 	sqlDB := m.DB
 	return func() tea.Msg {
-		creds, err := loadIACredentials()
-		if err != nil {
-			return playlistProgressMsg{Done: true, Err: err}
-		}
-
 		iaClient := newIAClient()
 
-		input := playlist.CreateInput{
-			Name:  name,
-			Query: query,
-			Limit: limit,
-		}
-
-		_, err = playlist.CreateFromSearch(
+		count, err := playlist.SyncPlaylist(
 			&db.DB{Conn: sqlDB},
 			iaClient,
-			creds,
-			input,
+			col,
 			func(state string, current, total int) {
-				log.Printf("[collections] progress: %s (%d/%d)", state, current, total)
+				log.Printf("[collections] sync progress: %s (%d/%d)", state, current, total)
 			},
 		)
 
@@ -804,40 +614,7 @@ func (m CollectionsModel) doCreatePlaylist(name, query string, limit int) tea.Cm
 		}
 
 		return playlistProgressMsg{
-			State:   fmt.Sprintf("Created playlist %q with %d items", name, limit),
-			Current: limit,
-			Total:   limit,
-			Done:    true,
-		}
-	}
-}
-
-func (m CollectionsModel) doImportPlaylist(parent, listName, title string) tea.Cmd {
-	sqlDB := m.DB
-	return func() tea.Msg {
-		iaClient := newIAClient()
-
-		input := playlist.ImportInput{
-			ParentID: parent,
-			ListName: listName,
-			Title:    title,
-		}
-
-		count, err := playlist.ImportExistingPlaylist(
-			&db.DB{Conn: sqlDB},
-			iaClient,
-			input,
-			func(state string, current, total int) {
-				log.Printf("[collections] import progress: %s (%d/%d)", state, current, total)
-			},
-		)
-
-		if err != nil {
-			return playlistProgressMsg{Done: true, Err: err}
-		}
-
-		return playlistProgressMsg{
-			State:   fmt.Sprintf("Imported %d items from %s/%s", count, parent, listName),
+			State:   fmt.Sprintf("Synced %d items from IA", count),
 			Current: count,
 			Total:   count,
 			Done:    true,
@@ -845,7 +622,7 @@ func (m CollectionsModel) doImportPlaylist(parent, listName, title string) tea.C
 	}
 }
 
-func (m CollectionsModel) doImportPatronList(rawURL, title string) tea.Cmd {
+func (m CollectionsModel) doImportPatronList(rawURL string) tea.Cmd {
 	sqlDB := m.DB
 	return func() tea.Msg {
 		iaClient := newIAClient()
@@ -854,7 +631,7 @@ func (m CollectionsModel) doImportPatronList(rawURL, title string) tea.Cmd {
 			&db.DB{Conn: sqlDB},
 			iaClient,
 			rawURL,
-			title,
+			"",
 			func(state string, current, total int) {
 				log.Printf("[collections] patron import progress: %s (%d/%d)", state, current, total)
 			},
@@ -875,11 +652,13 @@ func (m CollectionsModel) doImportPatronList(rawURL, title string) tea.Cmd {
 
 func collectionsColumns() []table.Column {
 	return []table.Column{
-		{Title: "Title", Width: 30},
-		{Title: "Source", Width: 12},
-		{Title: "URL", Width: 40},
-		{Title: "ID", Width: 25},
-		{Title: "Items", Width: 8},
+		{Title: "Title", Width: 28},
+		{Title: "Source", Width: 10},
+		{Title: "URL", Width: 30},
+		{Title: "ID", Width: 20},
+		{Title: "Tracks", Width: 8},
+		{Title: "Analyzed", Width: 9},
+		{Title: "% Done", Width: 7},
 		{Title: "Status", Width: 10},
 	}
 }
@@ -895,10 +674,6 @@ func openBrowser(url string) {
 		return
 	}
 	cmd.Start()
-}
-
-func loadIACredentials() (*ia.IACredentials, error) {
-	return ia.LoadCredentials()
 }
 
 func newIAClient() *http.Client {
