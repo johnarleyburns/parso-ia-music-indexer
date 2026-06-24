@@ -22,6 +22,7 @@ import (
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/config"
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/db"
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/ia"
+	"github.com/johnarleyburns/parso-ia-music-indexer/internal/playlist"
 	ratelimit "github.com/johnarleyburns/parso-ia-music-indexer/internal/rate"
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/tui"
 	"golang.org/x/time/rate"
@@ -386,15 +387,40 @@ func coordinatorLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activit
 		default:
 		}
 
-		if coll.SourceType == "playlist" {
-			albumCount, _ := db.GetCollectionAlbumCount(sqlDB.Conn, coll.CollectionID)
+		if coll.SourceType == "playlist" || coll.SourceType == "simplelist" {
 			events <- tui.ActivityEvent{
-				Type:         tui.EventInfo,
+				Type:         tui.EventCollectionStarted,
 				Timestamp:    time.Now(),
 				CollectionID: coll.CollectionID,
-				Message:      fmt.Sprintf("[%d/%d] Skipping playlist %q (%d items already imported)", i+1, len(collections), coll.Title, albumCount),
+				Message:      fmt.Sprintf("[%d/%d] Syncing playlist %q", i+1, len(collections), coll.Title),
 			}
-			db.MarkCollectionDiscovered(sqlDB.Conn, coll.CollectionID, albumCount)
+
+			db.MarkCollectionDiscovering(sqlDB.Conn, coll.CollectionID)
+
+			count, syncErr := playlist.SyncPlaylist(sqlDB, client, coll, func(state string, current, total int) {
+				log.Printf("[coordinator] playlist sync %s: %s (%d/%d)", coll.CollectionID, state, current, total)
+			})
+			if syncErr != nil {
+				events <- tui.ActivityEvent{
+					Type:         tui.EventCollectionFailed,
+					Timestamp:    time.Now(),
+					CollectionID: coll.CollectionID,
+					Message:      fmt.Sprintf("Playlist %q sync failed: %v", coll.Title, syncErr),
+					Error:        syncErr.Error(),
+				}
+				db.MarkCollectionFailed(sqlDB.Conn, coll.CollectionID, syncErr.Error())
+				continue
+			}
+
+			totalAlbums += count
+
+			events <- tui.ActivityEvent{
+				Type:         tui.EventCollectionCompleted,
+				Timestamp:    time.Now(),
+				CollectionID: coll.CollectionID,
+				Message:      fmt.Sprintf("[%d/%d] Playlist %q synced: %d items", i+1, len(collections), coll.Title, count),
+				Count:        count,
+			}
 			continue
 		}
 

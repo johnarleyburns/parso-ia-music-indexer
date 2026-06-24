@@ -238,21 +238,8 @@ func (m CollectionsModel) updateView(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 				openBrowser(url)
 			}
 			return m, nil
-		case "s":
-			idx := m.table.Cursor()
-			if idx >= 0 && idx < len(m.collections) {
-				col := m.collections[idx]
-				if col.SourceType == "playlist" || col.SourceType == "simplelist" {
-					m.mode = colModeProgress
-					m.progressState = "Starting sync..."
-					m.progressCurrent = 0
-					m.progressTotal = 0
-					m.progressErr = nil
-					return m, m.doSyncPlaylist(col)
-				}
-			}
-			return m, nil
 		}
+
 	}
 
 	var cmd tea.Cmd
@@ -468,7 +455,7 @@ func (m CollectionsModel) viewList() string {
 			}
 	}
 
-	s += "\n" + helpStyle.Render("  [c] add source  [v] view in browse  [o] open URL  [s] sync playlist  [d] delete  [r] refresh  [↑/↓] navigate")
+	s += "\n" + helpStyle.Render("  [c] add source  [v] view in browse  [o] open URL  [d] delete  [r] refresh  [↑/↓] navigate")
 	return s
 }
 
@@ -592,33 +579,6 @@ func (m CollectionsModel) doDelete(collectionID string) tea.Cmd {
 			return collectionsRefreshMsg{Err: err}
 		}
 		return loadCollectionsWithStats(dbConn)
-	}
-}
-
-func (m CollectionsModel) doSyncPlaylist(col db.Collection) tea.Cmd {
-	sqlDB := m.DB
-	return func() tea.Msg {
-		iaClient := newIAClient()
-
-		count, err := playlist.SyncPlaylist(
-			&db.DB{Conn: sqlDB},
-			iaClient,
-			col,
-			func(state string, current, total int) {
-				log.Printf("[collections] sync progress: %s (%d/%d)", state, current, total)
-			},
-		)
-
-		if err != nil {
-			return playlistProgressMsg{Done: true, Err: err}
-		}
-
-		return playlistProgressMsg{
-			State:   fmt.Sprintf("Synced %d items from IA", count),
-			Current: count,
-			Total:   count,
-			Done:    true,
-		}
 	}
 }
 

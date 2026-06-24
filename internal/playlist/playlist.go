@@ -129,8 +129,8 @@ func SyncPlaylist(sqlDB *db.DB, iaClient *http.Client, col db.Collection, onProg
 		return 0, fmt.Errorf("insert albums: %w", err)
 	}
 
-	if err := db.ReplaceCollectionAlbums(sqlDB.Conn, col.CollectionID, identifiers); err != nil {
-		return 0, fmt.Errorf("replace collection albums: %w", err)
+	if err := db.BulkLinkAlbumsToCollection(sqlDB.Conn, col.CollectionID, identifiers); err != nil {
+		return 0, fmt.Errorf("link collection albums: %w", err)
 	}
 
 	if err := db.MarkCollectionDiscovered(sqlDB.Conn, col.CollectionID, len(identifiers)); err != nil {

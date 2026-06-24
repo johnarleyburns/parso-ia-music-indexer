@@ -409,22 +409,20 @@ func (m DashboardModel) buildCoordinatorSection(sectionTitle func(string) string
 
 	s := sectionTitle("Coordinator") + "\n"
 
-	var status string
 	if m.CoordRunning {
-		status = runningStyle.Render("\u25b6 Running")
+		s += fmt.Sprintf("  Status: %s\n", runningStyle.Render("running"))
 	} else {
-		status = stoppedStyle.Render("\u25aa Stopped")
+		s += fmt.Sprintf("  Status: %s\n", stoppedStyle.Render("stopped"))
 	}
 
-	s += fmt.Sprintf("  Status: %s\n", status)
-
+	collDisplay := ""
 	if m.CoordCurrentCollection != "" {
-		collDisplay := m.CoordCurrentCollection
+		collDisplay = m.CoordCurrentCollection
 		if len(collDisplay) > 30 {
 			collDisplay = collDisplay[:30] + "..."
 		}
-		s += mutedStyle.Render(fmt.Sprintf("  Collection: %s\n", collDisplay))
 	}
+	s += mutedStyle.Render(fmt.Sprintf("  Collection: %s\n", collDisplay))
 
 	s += mutedStyle.Render("  [s] start  [x] stop  [F] reset failed")
 
