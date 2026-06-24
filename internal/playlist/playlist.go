@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/db"
@@ -179,4 +180,65 @@ func ImportExistingPlaylist(sqlDB *db.DB, iaClient *http.Client, input ImportInp
 	onProgress(fmt.Sprintf("Done! %d items imported", len(entries)), len(entries), len(entries))
 
 	return len(entries), nil
+}
+
+func ImportPatronList(sqlDB *db.DB, iaClient *http.Client, rawURL, title string, onProgress ProgressCallback) (int, error) {
+	onProgress("Fetching playlist from IA...", 0, 0)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	list, err := ia.FetchPatronList(ctx, iaClient, rawURL)
+	cancel()
+	if err != nil {
+		return 0, fmt.Errorf("fetch patron list: %w", err)
+	}
+
+	members := list.Value.Members
+	if len(members) == 0 {
+		return 0, fmt.Errorf("no items found in playlist")
+	}
+
+	log.Printf("[playlist] patron import: found %d items in list %q", len(members), list.Value.ListName)
+
+	if title == "" {
+		title = list.Value.ListName
+	}
+
+	onProgress(fmt.Sprintf("Found %d items, importing...", len(members)), 0, len(members))
+
+	apiURL, _ := ia.ListAPIURL(rawURL)
+	collectionID := fmt.Sprintf("@%d-%s", list.Value.ID, strings.ToLower(strings.ReplaceAll(list.Value.ListName, " ", "-")))
+	queryForDB := apiURL
+
+	albums := make([]db.AlbumInsert, len(members))
+	identifiers := make([]string, len(members))
+	for i, m := range members {
+		identifiers[i] = m.Identifier
+		albums[i] = db.AlbumInsert{Identifier: m.Identifier, Downloads: 0}
+	}
+
+	db.BulkInsertAlbums(sqlDB.Conn, albums)
+
+	if err := db.BulkLinkAlbumsToCollection(sqlDB.Conn, collectionID, identifiers); err != nil {
+		return 0, fmt.Errorf("link albums: %w", err)
+	}
+
+	insertErr := db.InsertCollection(sqlDB.Conn, db.CollectionInsert{
+		CollectionID:  collectionID,
+		Title:         title,
+		Query:         queryForDB,
+		ExpectedCount: len(members),
+		SourceType:    "playlist",
+	})
+	if insertErr != nil {
+		log.Printf("[playlist] insert collection warning: %v", insertErr)
+	}
+
+	for i, m := range members {
+		onProgress(fmt.Sprintf("Importing..."), i+1, len(members))
+		_ = m
+	}
+
+	onProgress(fmt.Sprintf("Done! %d items imported", len(members)), len(members), len(members))
+
+	return len(members), nil
 }

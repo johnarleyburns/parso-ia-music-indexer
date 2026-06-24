@@ -112,7 +112,7 @@ func ClaimUntaggedAlbum(db *sql.DB) (*UntaggedAlbum, error) {
 			INNER JOIN track_embeddings e ON t.id = e.track_id
 			WHERE t.album_id = a.ia_identifier AND t.status = 'completed' AND (t.tags IS NULL OR t.tags = '')
 		  )
-		ORDER BY a.updated_at ASC
+		ORDER BY a.created_at DESC
 		LIMIT 1
 	`).Scan(&album.IAIdentifier, &album.Title, &album.Creator, &album.Subjects, &album.Genres, &album.TrackCount)
 	if err != nil {
@@ -296,7 +296,7 @@ func ClaimUnresolvedAlbum(db *sql.DB, workerID string) (string, error) {
 
 	var identifier string
 	err = tx.QueryRow(
-		`SELECT ia_identifier FROM albums WHERE status = 'pending' ORDER BY created_at LIMIT 1`,
+		`SELECT ia_identifier FROM albums WHERE status = 'pending' ORDER BY created_at DESC LIMIT 1`,
 	).Scan(&identifier)
 	if err == sql.ErrNoRows {
 		return "", nil
@@ -330,7 +330,7 @@ func ClaimUnresolvedAlbumBatch(db *sql.DB, workerID string, batchSize int) ([]st
 	defer tx.Rollback()
 
 	rows, err := tx.Query(
-		`SELECT ia_identifier FROM albums WHERE status = 'pending' ORDER BY created_at LIMIT ?`,
+		`SELECT ia_identifier FROM albums WHERE status = 'pending' ORDER BY created_at DESC LIMIT ?`,
 		batchSize,
 	)
 	if err != nil {
@@ -535,7 +535,7 @@ func ClaimNextTrackBatch(db *sql.DB, workerID string, batchSize int) ([]ClaimedT
 		`SELECT t.id, t.album_id, t.filename, t.title, t.download_url FROM tracks t
 		 INNER JOIN albums a ON t.album_id = a.ia_identifier
 		 WHERE t.status = 'pending' AND a.prechecked = 1
-		 ORDER BY t.album_id, t.track_number, t.created_at
+		 ORDER BY t.created_at DESC, t.album_id, t.track_number
 		 LIMIT ?`,
 		batchSize,
 	)
@@ -936,7 +936,7 @@ func ClaimUnprecheckedAlbum(sqlDB *sql.DB) (*AlbumResult, error) {
 			COALESCE((SELECT AVG(e.quality_score) FROM tracks t INNER JOIN track_embeddings e ON t.id = e.track_id WHERE t.album_id = a.ia_identifier AND t.status = 'completed'), 0.0)
 		FROM albums a
 		WHERE a.status = 'resolved' AND a.prechecked = 0 AND a.track_count > 0
-		ORDER BY a.updated_at ASC
+		ORDER BY a.created_at DESC
 		LIMIT 1`).
 		Scan(&r.IAIdentifier, &r.Title, &r.Creator, &r.Collection, &r.ArtURL, &r.TrackCount, &r.Status, &r.CompletedCount, &r.Downloads, &r.AvgQuality)
 	if err == sql.ErrNoRows {

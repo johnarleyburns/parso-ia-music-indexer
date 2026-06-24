@@ -502,19 +502,18 @@ func (m CollectionsModel) updateImportByURL(msg tea.Msg) (CollectionsModel, tea.
 		case "enter":
 			rawURL := strings.TrimSpace(m.importURL.Value())
 			title := strings.TrimSpace(m.importURLTitle.Value())
-			parent, listName := parsePlaylistURL(rawURL)
-			if parent == "" || listName == "" {
+			if rawURL == "" {
 				return m, nil
 			}
 			if title == "" {
-				title = listName
+				title = rawURL
 			}
 			m.mode = colModeProgress
 			m.progressState = "Starting import..."
 			m.progressCurrent = 0
 			m.progressTotal = 0
 			m.progressErr = nil
-			return m, m.doImportPlaylist(parent, listName, title)
+			return m, m.doImportPatronList(rawURL, title)
 		}
 	}
 
@@ -846,6 +845,34 @@ func (m CollectionsModel) doImportPlaylist(parent, listName, title string) tea.C
 	}
 }
 
+func (m CollectionsModel) doImportPatronList(rawURL, title string) tea.Cmd {
+	sqlDB := m.DB
+	return func() tea.Msg {
+		iaClient := newIAClient()
+
+		count, err := playlist.ImportPatronList(
+			&db.DB{Conn: sqlDB},
+			iaClient,
+			rawURL,
+			title,
+			func(state string, current, total int) {
+				log.Printf("[collections] patron import progress: %s (%d/%d)", state, current, total)
+			},
+		)
+
+		if err != nil {
+			return playlistProgressMsg{Done: true, Err: err}
+		}
+
+		return playlistProgressMsg{
+			State:   fmt.Sprintf("Imported %d items from patron list", count),
+			Current: count,
+			Total:   count,
+			Done:    true,
+		}
+	}
+}
+
 func collectionsColumns() []table.Column {
 	return []table.Column{
 		{Title: "Title", Width: 30},
@@ -855,62 +882,6 @@ func collectionsColumns() []table.Column {
 		{Title: "Items", Width: 8},
 		{Title: "Status", Width: 10},
 	}
-}
-
-func parsePlaylistURL(rawURL string) (parentID, listName string) {
-	u := strings.TrimSpace(rawURL)
-	u = strings.TrimPrefix(u, "https://")
-	u = strings.TrimPrefix(u, "http://")
-	u = strings.TrimPrefix(u, "archive.org/details/")
-
-	parts := strings.Split(u, "/")
-	var user string
-	for i, p := range parts {
-		if strings.HasPrefix(p, "@") {
-			user = p
-			if i+1 < len(parts) {
-				rest := parts[i+1:]
-				for j, r := range rest {
-					if r == "lists" && j+2 < len(rest) {
-						listName = rest[j+2]
-						break
-					}
-				}
-			}
-			break
-		}
-	}
-	if strings.HasPrefix(listName, "@") || listName == "lists" || listName == "" {
-		parts := strings.Split(u, "/")
-		var foundUser bool
-		var foundLists bool
-		for _, p := range parts {
-			if strings.HasPrefix(p, "@") {
-				user = p
-				foundUser = true
-			} else if foundUser && p == "lists" {
-				foundLists = true
-			} else if foundLists && isNumeric(p) {
-				continue
-			} else if foundLists && p != "" {
-				listName = p
-				break
-			}
-		}
-	}
-	if user == "" || listName == "" {
-		return "", ""
-	}
-	return user, listName
-}
-
-func isNumeric(s string) bool {
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return len(s) > 0
 }
 
 func openBrowser(url string) {

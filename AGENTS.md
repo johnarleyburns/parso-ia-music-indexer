@@ -499,3 +499,55 @@ Do not ask: *Can this be coded quickly?*
 Ask: *Can this change be implemented **safely, correctly, incrementally, and without damaging long-term maintainability**?*
 
 That question governs all development.
+
+---
+
+## Post-Implementation Workflow
+
+After every implementation is complete, the agent must perform the following steps in order before considering the work done:
+
+### 1. Plan vs Implementation Reconciliation
+
+Re-read the original plan documents and compare every planned change against the actual implementation:
+
+- Were all planned changes implemented?
+- Were any unplanned changes introduced?
+- Did any planned changes get missed or skipped?
+- Are there discrepancies between the intended design and the delivered code?
+
+Fix any discrepancies found.
+
+### 2. Status Update
+
+Update the current implementation status document (e.g., `current_state.md` in the plan directory) with:
+- Completed phases
+- Pending phases
+- Known blockers
+- Architectural changes made
+- Remaining work
+
+### 3. README Update
+
+If the changes affect how the system is used, built, tested, or deployed, update the README accordingly:
+- New features or capabilities
+- Changed commands or configuration
+- Updated dependencies
+- Changed behavior
+
+### 4. Build, Vet, Test
+
+Run the full verification suite:
+
+```
+make build && go vet ./... && go test -race -count=1 ./...
+```
+
+All must pass. Report the results.
+
+### 5. Commit and Push
+
+Write a concise commit message summarizing the changes. If multiple logical changes exist, use separate commits.
+
+Commit and push to the current branch. If on a feature branch, open a PR. If on main, push directly.
+
+> **Never skip post-implementation steps. They are mandatory, not optional.**

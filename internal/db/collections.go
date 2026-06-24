@@ -127,7 +127,7 @@ func GetAllCollections(db *sql.DB) ([]Collection, error) {
 		        discovered_count, status, COALESCE(last_cursor,''),
 		        COALESCE(error_message,''), COALESCE(last_synced_at,''),
 		        COALESCE(source_type,'collection'), COALESCE(list_name,''), COALESCE(parent_id,'')
-		 FROM collections ORDER BY title`,
+		 FROM collections ORDER BY created_at DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query collections: %w", err)

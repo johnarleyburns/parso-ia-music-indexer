@@ -1328,3 +1328,204 @@ func TestClaimUntaggedAlbum(t *testing.T) {
 		t.Error("expected no untagged albums after tagging")
 	}
 }
+
+func TestGetAllCollectionsOrdering(t *testing.T) {
+	db := testDB(t)
+	db.Conn.Exec(`INSERT INTO collections(collection_id, title, query, expected_count, created_at) VALUES('c1', 'Collection 1', 'q1', 10, datetime('now', '-60 seconds'))`)
+	db.Conn.Exec(`INSERT INTO collections(collection_id, title, query, expected_count, created_at) VALUES('c2', 'Collection 2', 'q2', 20, datetime('now', '-30 seconds'))`)
+	db.Conn.Exec(`INSERT INTO collections(collection_id, title, query, expected_count, created_at) VALUES('c3', 'Collection 3', 'q3', 30, datetime('now', '-0 seconds'))`)
+
+	cols, err := GetAllCollections(db.Conn)
+	if err != nil {
+		t.Fatalf("GetAllCollections: %v", err)
+	}
+	if len(cols) != 3 {
+		t.Fatalf("expected 3 collections, got %d", len(cols))
+	}
+	if cols[0].CollectionID != "c3" {
+		t.Errorf("newest first: expected c3, got %s", cols[0].CollectionID)
+	}
+	if cols[1].CollectionID != "c2" {
+		t.Errorf("second: expected c2, got %s", cols[1].CollectionID)
+	}
+	if cols[2].CollectionID != "c1" {
+		t.Errorf("oldest last: expected c1, got %s", cols[2].CollectionID)
+	}
+}
+
+func TestClaimUnresolvedAlbumOrdering(t *testing.T) {
+	db := testDB(t)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('old-album', 'pending', datetime('now', '-120 seconds'))`)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('mid-album', 'pending', datetime('now', '-60 seconds'))`)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('new-album', 'pending', datetime('now', '-0 seconds'))`)
+
+	id, err := ClaimUnresolvedAlbum(db.Conn, "w1")
+	if err != nil {
+		t.Fatalf("ClaimUnresolvedAlbum: %v", err)
+	}
+	if id != "new-album" {
+		t.Errorf("expected newest album first, got %s (want new-album)", id)
+	}
+
+	id, err = ClaimUnresolvedAlbum(db.Conn, "w2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "mid-album" {
+		t.Errorf("expected second newest, got %s (want mid-album)", id)
+	}
+
+	id, err = ClaimUnresolvedAlbum(db.Conn, "w3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "old-album" {
+		t.Errorf("expected oldest last, got %s (want old-album)", id)
+	}
+}
+
+func TestClaimUnresolvedAlbumBatchOrdering(t *testing.T) {
+	db := testDB(t)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('a1', 'pending', datetime('now', '-90 seconds'))`)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('a2', 'pending', datetime('now', '-60 seconds'))`)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('a3', 'pending', datetime('now', '-30 seconds'))`)
+
+	ids, err := ClaimUnresolvedAlbumBatch(db.Conn, "w1", 3)
+	if err != nil {
+		t.Fatalf("ClaimUnresolvedAlbumBatch: %v", err)
+	}
+	if len(ids) != 3 {
+		t.Fatalf("expected 3 claimed, got %d", len(ids))
+	}
+	if ids[0] != "a3" {
+		t.Errorf("newest first: expected a3, got %s", ids[0])
+	}
+	if ids[1] != "a2" {
+		t.Errorf("second: expected a2, got %s", ids[1])
+	}
+	if ids[2] != "a1" {
+		t.Errorf("oldest last: expected a1, got %s", ids[2])
+	}
+}
+
+func TestClaimNextTrackBatchOrdering(t *testing.T) {
+	db := testDB(t)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, prechecked, created_at) VALUES('album-x', 'resolved', 1, datetime('now', '-60 seconds'))`)
+	db.Conn.Exec(`INSERT INTO tracks(album_id, filename, title, download_url, status, created_at) VALUES('album-x', 'old.mp3', 'Old', 'https://x/1', 'pending', datetime('now', '-90 seconds'))`)
+	db.Conn.Exec(`INSERT INTO tracks(album_id, filename, title, download_url, status, created_at) VALUES('album-x', 'mid.mp3', 'Mid', 'https://x/2', 'pending', datetime('now', '-60 seconds'))`)
+	db.Conn.Exec(`INSERT INTO tracks(album_id, filename, title, download_url, status, created_at) VALUES('album-x', 'new.mp3', 'New', 'https://x/3', 'pending', datetime('now', '-30 seconds'))`)
+
+	claimed, err := ClaimNextTrackBatch(db.Conn, "w1", 3)
+	if err != nil {
+		t.Fatalf("ClaimNextTrackBatch: %v", err)
+	}
+	if len(claimed) != 3 {
+		t.Fatalf("expected 3 claimed, got %d", len(claimed))
+	}
+	if claimed[0].Title != "New" {
+		t.Errorf("newest first: expected New, got %s", claimed[0].Title)
+	}
+	if claimed[1].Title != "Mid" {
+		t.Errorf("second: expected Mid, got %s", claimed[1].Title)
+	}
+	if claimed[2].Title != "Old" {
+		t.Errorf("oldest last: expected Old, got %s", claimed[2].Title)
+	}
+}
+
+func TestClaimUnprecheckedAlbumOrdering(t *testing.T) {
+	db := testDB(t)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, title, status, prechecked, track_count, created_at) VALUES('old-resolved', 'Old', 'resolved', 0, 5, datetime('now', '-120 seconds'))`)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, title, status, prechecked, track_count, created_at) VALUES('mid-resolved', 'Mid', 'resolved', 0, 5, datetime('now', '-60 seconds'))`)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, title, status, prechecked, track_count, created_at) VALUES('new-resolved', 'New', 'resolved', 0, 5, datetime('now', '-0 seconds'))`)
+
+	r, err := ClaimUnprecheckedAlbum(db.Conn)
+	if err != nil {
+		t.Fatalf("ClaimUnprecheckedAlbum: %v", err)
+	}
+	if r == nil {
+		t.Fatal("expected to claim an album")
+	}
+	if r.IAIdentifier != "new-resolved" {
+		t.Errorf("newest first: expected new-resolved, got %s", r.IAIdentifier)
+	}
+	MarkAlbumPrechecked(db.Conn, r.IAIdentifier)
+
+	r, err = ClaimUnprecheckedAlbum(db.Conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r == nil {
+		t.Fatal("expected second album")
+	}
+	if r.IAIdentifier != "mid-resolved" {
+		t.Errorf("second: expected mid-resolved, got %s", r.IAIdentifier)
+	}
+	MarkAlbumPrechecked(db.Conn, r.IAIdentifier)
+
+	r, err = ClaimUnprecheckedAlbum(db.Conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r == nil {
+		t.Fatal("expected third album")
+	}
+	if r.IAIdentifier != "old-resolved" {
+		t.Errorf("oldest last: expected old-resolved, got %s", r.IAIdentifier)
+	}
+	MarkAlbumPrechecked(db.Conn, r.IAIdentifier)
+}
+
+func TestClaimUntaggedAlbumOrdering(t *testing.T) {
+	db := testDB(t)
+
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, title, creator, status, prechecked, track_count, created_at) VALUES('a-old', 'Old', 'Creator', 'resolved', 1, 1, datetime('now', '-120 seconds'))`)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, title, creator, status, prechecked, track_count, created_at) VALUES('a-mid', 'Mid', 'Creator', 'resolved', 1, 1, datetime('now', '-60 seconds'))`)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, title, creator, status, prechecked, track_count, created_at) VALUES('a-new', 'New', 'Creator', 'resolved', 1, 1, datetime('now', '-0 seconds'))`)
+
+	for _, aid := range []string{"a-old", "a-mid", "a-new"} {
+		db.Conn.Exec(`INSERT INTO tracks(album_id, filename, title, download_url, status, created_at) VALUES(?, ?, ?, ?, 'completed', datetime('now'))`, aid, aid+"-t.mp3", aid, "https://x/"+aid)
+		var trackID int
+		db.Conn.QueryRow(`SELECT id FROM tracks WHERE album_id=?`, aid).Scan(&trackID)
+		clap := make([]byte, 1024)
+		mfcc := make([]byte, 80)
+		chroma := make([]byte, 24)
+		db.Conn.Exec(`INSERT INTO track_embeddings(track_id, clap, mfcc, chroma) VALUES(?, ?, ?, ?)`, trackID, clap, mfcc, chroma)
+	}
+
+	album, err := ClaimUntaggedAlbum(db.Conn)
+	if err != nil {
+		t.Fatalf("ClaimUntaggedAlbum: %v", err)
+	}
+	if album == nil {
+		t.Fatal("expected to claim an album")
+	}
+	if album.IAIdentifier != "a-new" {
+		t.Errorf("newest first: expected a-new, got %s", album.IAIdentifier)
+	}
+	UpdateTracksTags(db.Conn, album.IAIdentifier, "tagged")
+
+	album, err = ClaimUntaggedAlbum(db.Conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if album == nil {
+		t.Fatal("expected second album")
+	}
+	if album.IAIdentifier != "a-mid" {
+		t.Errorf("second: expected a-mid, got %s", album.IAIdentifier)
+	}
+	UpdateTracksTags(db.Conn, album.IAIdentifier, "tagged")
+
+	album, err = ClaimUntaggedAlbum(db.Conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if album == nil {
+		t.Fatal("expected third album")
+	}
+	if album.IAIdentifier != "a-old" {
+		t.Errorf("oldest last: expected a-old, got %s", album.IAIdentifier)
+	}
+	UpdateTracksTags(db.Conn, album.IAIdentifier, "tagged")
+}
