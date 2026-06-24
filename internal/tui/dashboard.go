@@ -407,12 +407,9 @@ func (m DashboardModel) buildCoordinatorSection(sectionTitle func(string) string
 	stoppedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
 	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#9ca3af"))
 
-	s := sectionTitle("Coordinator") + "\n"
-
+	statusText := stoppedStyle.Render("stopped")
 	if m.CoordRunning {
-		s += fmt.Sprintf("  Status: %s\n", runningStyle.Render("running"))
-	} else {
-		s += fmt.Sprintf("  Status: %s\n", stoppedStyle.Render("stopped"))
+		statusText = runningStyle.Render("running")
 	}
 
 	collDisplay := ""
@@ -422,11 +419,14 @@ func (m DashboardModel) buildCoordinatorSection(sectionTitle func(string) string
 			collDisplay = collDisplay[:30] + "..."
 		}
 	}
-	s += mutedStyle.Render(fmt.Sprintf("  Collection: %s\n", collDisplay))
 
-	s += mutedStyle.Render("  [s] start  [x] stop  [F] reset failed")
-
-	return s
+	lines := []string{
+		sectionTitle("Coordinator"),
+		fmt.Sprintf("  Status: %s", statusText),
+		mutedStyle.Render(fmt.Sprintf("  Collection: %s", collDisplay)),
+		mutedStyle.Render("  [s] start  [x] stop  [F] reset failed"),
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m DashboardModel) buildPoolSection(sectionTitle func(string) string, name string, count int, states map[string]*workerState, controls string) string {
