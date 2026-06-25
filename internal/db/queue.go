@@ -373,7 +373,7 @@ func ClaimUnresolvedAlbumBatch(db *sql.DB, workerID string, batchSize int) ([]st
 func MarkAlbumResolved(db *sql.DB, identifier, title, creator, collection, artURL string, trackCount int) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := db.Exec(
-		`UPDATE albums SET status='resolved', title=?, creator=?, collection=?, art_url=?, track_count=?, updated_at=?
+		`UPDATE albums SET status='resolved', prechecked=1, title=?, creator=?, collection=?, art_url=?, track_count=?, updated_at=?
 		 WHERE ia_identifier=?`,
 		title, creator, collection, artURL, trackCount, now, identifier,
 	)
