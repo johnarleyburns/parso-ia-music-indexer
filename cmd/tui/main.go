@@ -1091,15 +1091,25 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	if err != nil {
 		errMsg := fmt.Sprintf("clap: %v", err)
 		dbMu.Lock()
-		db.MarkTrackFailed(sqlDB.Conn, track.ID, errMsg)
+		requeued, _ := db.RequeueTrackForRetry(sqlDB.Conn, track.ID, 3, errMsg)
 		dbMu.Unlock()
-		events <- tui.ActivityEvent{
-			Type:       tui.EventAnalysisFailed,
-			Timestamp:  time.Now(),
-			Identifier: trackLabel,
-			WorkerID:   workerID,
-			Message:    fmt.Sprintf("[%s] CLAP error %s: %v", workerID, trackLabel, err),
-			Error:      err.Error(),
+		if requeued {
+			events <- tui.ActivityEvent{
+				Type:       tui.EventInfo,
+				Timestamp:  time.Now(),
+				Identifier: trackLabel,
+				WorkerID:   workerID,
+				Message:    fmt.Sprintf("[%s] CLAP error, requeued %s: %v", workerID, trackLabel, err),
+			}
+		} else {
+			events <- tui.ActivityEvent{
+				Type:       tui.EventAnalysisFailed,
+				Timestamp:  time.Now(),
+				Identifier: trackLabel,
+				WorkerID:   workerID,
+				Message:    fmt.Sprintf("[%s] CLAP error %s (max retries): %v", workerID, trackLabel, err),
+				Error:      err.Error(),
+			}
 		}
 		return false
 	}
