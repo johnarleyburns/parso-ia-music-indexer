@@ -28,12 +28,16 @@ type candidate struct {
 }
 
 func SaveEmbedding(db *sql.DB, trackID int, clap, mfcc, chroma []float32, qualityScore float64) error {
+	return SaveEmbeddingWithStrategy(db, trackID, clap, mfcc, chroma, qualityScore, "head")
+}
+
+func SaveEmbeddingWithStrategy(db *sql.DB, trackID int, clap, mfcc, chroma []float32, qualityScore float64, strategy string) error {
 	clapBlob := encodeF16(l2Normalize(clap))
 	mfccBlob := encodeF16(l2Normalize(mfcc))
 	chromaBlob := encodeF16(l2Normalize(chroma))
 	_, err := db.Exec(
-		`INSERT OR REPLACE INTO track_embeddings(track_id, clap, mfcc, chroma, quality_score) VALUES(?, ?, ?, ?, ?)`,
-		trackID, clapBlob, mfccBlob, chromaBlob, qualityScore,
+		`INSERT OR REPLACE INTO track_embeddings(track_id, clap, mfcc, chroma, quality_score, sample_strategy) VALUES(?, ?, ?, ?, ?, ?)`,
+		trackID, clapBlob, mfccBlob, chromaBlob, qualityScore, strategy,
 	)
 	return err
 }
@@ -95,6 +99,67 @@ func GetEmbeddingCount(db *sql.DB) (int, error) {
 	var count int
 	err := db.QueryRow(`SELECT count(*) FROM track_embeddings`).Scan(&count)
 	return count, err
+}
+
+func GetEmbeddingStrategyCounts(db *sql.DB) (map[string]int, error) {
+	rows, err := db.Query(`SELECT sample_strategy, count(*) FROM track_embeddings GROUP BY sample_strategy`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := make(map[string]int)
+	for rows.Next() {
+		var strategy string
+		var count int
+		if err := rows.Scan(&strategy, &count); err != nil {
+			return nil, err
+		}
+		counts[strategy] = count
+	}
+	return counts, rows.Err()
+}
+
+func ResetTracksWithStrategy(db *sql.DB, targetStrategy string, newStatus string) (int64, error) {
+	result, err := db.Exec(
+		`UPDATE tracks SET status=?, error_message=NULL, retry_count=0
+		 WHERE id IN (
+			SELECT e.track_id FROM track_embeddings e
+			WHERE e.sample_strategy != ?
+		 ) AND status = 'completed'`,
+		newStatus, targetStrategy,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+type LexicalCoverage struct {
+	TotalCompletedTracks  int
+	TracksWithEmptyTags   int
+	TracksWithTags        int
+	AlbumsMissingSubjects int
+	AlbumsMissingGenres   int
+	AlbumsWithMetadata    int
+	TotalCompletedAlbums  int
+}
+
+func GetLexicalCoverage(db *sql.DB) (*LexicalCoverage, error) {
+	c := &LexicalCoverage{}
+
+	db.QueryRow(`SELECT count(*) FROM tracks WHERE status = 'completed'`).Scan(&c.TotalCompletedTracks)
+	db.QueryRow(`SELECT count(*) FROM tracks WHERE status = 'completed' AND (tags IS NULL OR tags = '')`).Scan(&c.TracksWithEmptyTags)
+	db.QueryRow(`SELECT count(DISTINCT t.album_id) FROM tracks t JOIN albums a ON t.album_id = a.ia_identifier WHERE t.status = 'completed'`).Scan(&c.TotalCompletedAlbums)
+	db.QueryRow(`SELECT count(DISTINCT a.ia_identifier) FROM albums a JOIN tracks t ON t.album_id = a.ia_identifier WHERE t.status = 'completed' AND (a.subjects IS NULL OR a.subjects = '')`).Scan(&c.AlbumsMissingSubjects)
+	db.QueryRow(`SELECT count(DISTINCT a.ia_identifier) FROM albums a JOIN tracks t ON t.album_id = a.ia_identifier WHERE t.status = 'completed' AND (a.genres IS NULL OR a.genres = '')`).Scan(&c.AlbumsMissingGenres)
+
+	c.TracksWithTags = c.TotalCompletedTracks - c.TracksWithEmptyTags
+	c.AlbumsWithMetadata = c.TotalCompletedAlbums
+	if c.AlbumsMissingSubjects > 0 || c.AlbumsMissingGenres > 0 {
+		c.AlbumsWithMetadata = c.TotalCompletedAlbums - max(c.AlbumsMissingSubjects, c.AlbumsMissingGenres)
+	}
+
+	return c, nil
 }
 
 func GetEmbedding(db *sql.DB, trackID int) (clap, mfcc, chroma []float32, quality float64, err error) {

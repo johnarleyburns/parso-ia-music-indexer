@@ -76,6 +76,13 @@ special_info = {
 with open(os.path.join(args.output_dir, "tokenizer_config.json"), "w") as f:
     json.dump(special_info, f, indent=2)
 
+# Save byte_encoder.json for deterministic tokenization
+if hasattr(tokenizer, "byte_encoder"):
+    byte_encoder = {int(k): v for k, v in tokenizer.byte_encoder.items()}
+    with open(os.path.join(args.output_dir, "byte_encoder.json"), "w") as f:
+        json.dump(byte_encoder, f, indent=2)
+    print(f"Byte encoder: {len(byte_encoder)} entries")
+
 
 # ── Step 2: Export Core ML model ──────────────────────────────────────────
 

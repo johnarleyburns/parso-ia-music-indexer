@@ -1001,7 +1001,16 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 		return true
 	}
 	netStart := time.Now()
-	mp3Data, err := audio.StreamAudioFromURL(ctx, iaClient, track.DownloadURL, cfg.MaxBytes, bwLimiter)
+	var mp3Data []byte
+	var err error
+	switch cfg.SampleStrategy {
+	case "midpoint":
+		mp3Data, err = audio.StreamAudioMidpoint(ctx, iaClient, track.DownloadURL, cfg.MaxBytes, cfg.SampleSkipSeconds, bwLimiter)
+	case "head":
+		mp3Data, err = audio.StreamAudioFromURL(ctx, iaClient, track.DownloadURL, cfg.MaxBytes, bwLimiter)
+	default:
+		mp3Data, err = audio.StreamAudioFromURL(ctx, iaClient, track.DownloadURL, cfg.MaxBytes, bwLimiter)
+	}
 	metrics.RecordNetworkTime(time.Since(netStart))
 	cancel()
 	if err != nil {
@@ -1085,15 +1094,14 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	}
 
 	qualityStart := time.Now()
-	snrDB := audio.CalculateSNR(pcmSamples)
-	centroidHz := audio.CalculateSpectralCentroid(pcmSamples, sampleRate)
+	qc := audio.ComputeQualityAndChroma(pcmSamples, sampleRate)
 	crestFactor := audio.CalculateCrestFactor(pcmSamples)
-	compositeScore := audio.CalculateCompositeScore(snrDB, centroidHz, crestFactor)
+	compositeScore := audio.CalculateCompositeScore(qc.SNR, qc.CentroidHz, crestFactor)
 	metrics.RecordProcessingTime(time.Since(qualityStart))
 
 	if compositeScore < audio.QualityUnusable {
 		dbMu.Lock()
-		db.MarkTrackUnavailable(sqlDB.Conn, track.ID, fmt.Sprintf("low quality: score=%.3f snr=%.1f centroid=%.0f crest=%.1f", compositeScore, snrDB, centroidHz, crestFactor))
+		db.MarkTrackUnavailable(sqlDB.Conn, track.ID, fmt.Sprintf("low quality: score=%.3f snr=%.1f centroid=%.0f crest=%.1f", compositeScore, qc.SNR, qc.CentroidHz, crestFactor))
 		dbMu.Unlock()
 		events <- tui.ActivityEvent{
 			Type:         tui.EventAnalysisUnavailable,
@@ -1107,9 +1115,22 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	}
 
 	featureStart := time.Now()
-	mfccVec := audio.ComputeMFCCPool(pcmSamples, sampleRate)
-	chromaVec := audio.ComputeChromaPool(pcmSamples)
-	pcmBytes := clap.Float32ToBytes(pcmSamples)
+	const maxFeatureDuration = 15
+	maxFeatureSamples := maxFeatureDuration * sampleRate
+	featureSamples := pcmSamples
+	if len(featureSamples) > maxFeatureSamples {
+		featureSamples = featureSamples[:maxFeatureSamples]
+	}
+	mfccVec := audio.ComputeMFCCPool(featureSamples, sampleRate)
+	chromaVec := qc.Chroma
+
+	const clapDuration = 10
+	maxCLAPSamples := clapDuration * sampleRate
+	clapSamples := pcmSamples
+	if len(clapSamples) > maxCLAPSamples {
+		clapSamples = clapSamples[:maxCLAPSamples]
+	}
+	pcmBytes := clap.Float32ToBytes(clapSamples)
 	metrics.RecordProcessingTime(time.Since(featureStart))
 
 	clapCtx, clapCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1144,7 +1165,7 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	}
 
 	dbMu.Lock()
-	if err := db.SaveEmbedding(sqlDB.Conn, track.ID, clapVec, mfccVec, chromaVec, compositeScore); err != nil {
+	if err := db.SaveEmbeddingWithStrategy(sqlDB.Conn, track.ID, clapVec, mfccVec, chromaVec, compositeScore, cfg.SampleStrategy); err != nil {
 		errMsg := fmt.Sprintf("save embedding: %v", err)
 		db.MarkTrackFailed(sqlDB.Conn, track.ID, errMsg)
 		dbMu.Unlock()
@@ -1509,6 +1530,9 @@ func runHeadless(cfg *config.Config) {
 		os.Exit(1)
 	}
 
+	strategyCounts, _ := db.GetEmbeddingStrategyCounts(sqlDB.Conn)
+	coverage, _ := db.GetLexicalCoverage(sqlDB.Conn)
+
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetEscapeHTML(false)
 
@@ -1520,6 +1544,18 @@ func runHeadless(cfg *config.Config) {
 			"discovering": collStats.Discovering,
 			"discovered":  collStats.Discovered,
 			"failed":      collStats.Failed,
+		}
+	}
+
+	coverageMap := map[string]int{}
+	if coverage != nil {
+		coverageMap = map[string]int{
+			"total_completed_tracks":  coverage.TotalCompletedTracks,
+			"tracks_with_tags":        coverage.TracksWithTags,
+			"tracks_with_empty_tags":  coverage.TracksWithEmptyTags,
+			"total_completed_albums":  coverage.TotalCompletedAlbums,
+			"albums_missing_subjects": coverage.AlbumsMissingSubjects,
+			"albums_missing_genres":   coverage.AlbumsMissingGenres,
 		}
 	}
 
@@ -1548,6 +1584,8 @@ func runHeadless(cfg *config.Config) {
 		"embeddings": map[string]int{
 			"count": embedCount,
 		},
+		"embedding_strategies": strategyCounts,
+		"lexical_coverage":     coverageMap,
 	})
 
 	events := tui.NewEventChannel()

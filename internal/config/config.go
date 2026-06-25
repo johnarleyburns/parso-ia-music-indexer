@@ -20,6 +20,8 @@ type Config struct {
 	LibrivoxDenylistPath string
 	SeedCollections      bool
 	IAParent             string
+	SampleStrategy       string
+	SampleSkipSeconds    int
 }
 
 func Parse() *Config {
@@ -38,6 +40,8 @@ func Parse() *Config {
 	flag.StringVar(&cfg.LibrivoxDenylistPath, "librivox-denylist", envOrDefault("LIBRIVOX_DENYLIST", "data/librivox_denylist.json"), "Path to LibriVox denylist JSON file")
 	flag.BoolVar(&cfg.SeedCollections, "seed-collections", false, "Seed all collections from embedded JSON (INSERT OR IGNORE)")
 	flag.StringVar(&cfg.IAParent, "parent", envOrDefault("IA_PARENT", ""), "IA parent collection for playlists (default: fav-{username} from ia.ini)")
+	flag.StringVar(&cfg.SampleStrategy, "sample-strategy", envOrDefault("SAMPLE_STRATEGY", "midpoint"), "Audio sampling strategy: head, midpoint, or multiwindow")
+	flag.IntVar(&cfg.SampleSkipSeconds, "sample-skip-seconds", envOrDefaultInt("SAMPLE_SKIP_SECONDS", 20), "Seconds to skip from start before sampling (midpoint/multiwindow)")
 	flag.Parse()
 
 	return cfg

@@ -121,15 +121,16 @@ func (db *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_tracks_locked ON tracks(status, locked_at)`,
 
 		`CREATE TABLE IF NOT EXISTS track_embeddings (
-			track_id       INTEGER PRIMARY KEY REFERENCES tracks(id),
-			clap           BLOB NOT NULL,
-			mfcc           BLOB NOT NULL,
-			chroma         BLOB NOT NULL,
-			model_version  TEXT NOT NULL DEFAULT 'clap-htsat-fused:audio+text:512:l2:f16',
-			dim            INTEGER NOT NULL DEFAULT 512,
-			dtype          TEXT NOT NULL DEFAULT 'f16',
-			quality_score  REAL,
-			created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+			track_id        INTEGER PRIMARY KEY REFERENCES tracks(id),
+			clap            BLOB NOT NULL,
+			mfcc            BLOB NOT NULL,
+			chroma          BLOB NOT NULL,
+			model_version   TEXT NOT NULL DEFAULT 'clap-htsat-fused:audio+text:512:l2:f16',
+			dim             INTEGER NOT NULL DEFAULT 512,
+			dtype           TEXT NOT NULL DEFAULT 'f16',
+			sample_strategy TEXT NOT NULL DEFAULT 'head',
+			quality_score   REAL,
+			created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 	}
 
@@ -212,6 +213,12 @@ func (db *DB) migrateSchemaChanges() error {
 	if tableExists(db.Conn, "collections") && !columnExists(db.Conn, "collections", "parent_id") {
 		if _, err := db.Conn.Exec("ALTER TABLE collections ADD COLUMN parent_id TEXT"); err != nil {
 			return fmt.Errorf("add parent_id column: %w", err)
+		}
+	}
+
+	if tableExists(db.Conn, "track_embeddings") && !columnExists(db.Conn, "track_embeddings", "sample_strategy") {
+		if _, err := db.Conn.Exec("ALTER TABLE track_embeddings ADD COLUMN sample_strategy TEXT NOT NULL DEFAULT 'head'"); err != nil {
+			return fmt.Errorf("add sample_strategy column: %w", err)
 		}
 	}
 
