@@ -162,9 +162,6 @@ func IsAcceptableMP3(format string, bitrateStr string) bool {
 		if bitrate > 0 {
 			return bitrate >= 192
 		}
-		if format == "MP3" {
-			return false
-		}
 		return true
 	}
 

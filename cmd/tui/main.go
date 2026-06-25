@@ -1071,24 +1071,15 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	if err != nil {
 		reason := fmt.Sprintf("decode: %v", err)
 		dbMu.Lock()
-		skipped, _ := db.FlagAlbumPoorQuality(sqlDB.Conn, track.ID, track.AlbumID, reason)
+		db.MarkTrackUnavailable(sqlDB.Conn, track.ID, reason)
 		dbMu.Unlock()
 		events <- tui.ActivityEvent{
 			Type:       tui.EventAnalysisUnavailable,
 			Timestamp:  time.Now(),
 			Identifier: trackLabel,
 			WorkerID:   workerID,
-			Message:    fmt.Sprintf("[%s] Failed %s: %v", workerID, trackLabel, err),
+			Message:    fmt.Sprintf("[%s] Decode failed %s: %v", workerID, trackLabel, err),
 			Error:      err.Error(),
-		}
-		if skipped > 0 {
-			events <- tui.ActivityEvent{
-				Type:       tui.EventAlbumUnavailable,
-				Timestamp:  time.Now(),
-				Identifier: track.AlbumID,
-				WorkerID:   workerID,
-				Message:    fmt.Sprintf("[%s] Flagged album %s poor quality, skipped %d pending tracks", workerID, track.AlbumID, skipped),
-			}
 		}
 		return true
 	}
