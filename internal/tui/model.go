@@ -303,7 +303,11 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case resourceTickMsg:
 		m.Resources = msg.Stats
-		return m, m.resourceTick()
+		cmds := []tea.Cmd{m.resourceTick()}
+		if m.ActiveTab == 4 && m.Collections.ShouldAutoRefresh() {
+			cmds = append(cmds, m.Collections.doRefresh())
+		}
+		return m, tea.Batch(cmds...)
 
 	case browseSearchMsg, browseSimilarMsg, browseAlbumSearchMsg, browseAlbumDetailMsg:
 		var cmd tea.Cmd
@@ -316,7 +320,6 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case collectionsRefreshMsg:
-		log.Printf("[collections] MainModel.Update: received collectionsRefreshMsg, routing to Collections.Update")
 		var cmd tea.Cmd
 		m.Collections, cmd = m.Collections.Update(msg)
 		return m, cmd

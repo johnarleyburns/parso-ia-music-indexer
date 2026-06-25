@@ -129,6 +129,12 @@ func (m CollectionsModel) InputFocused() bool {
 		m.mode == colModeImportByURL
 }
 
+// ShouldAutoRefresh reports whether the collections list is being viewed and can
+// be refreshed in place without disrupting an input or modal sub-mode.
+func (m CollectionsModel) ShouldAutoRefresh() bool {
+	return m.mode == colModeView
+}
+
 func (m CollectionsModel) Update(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -163,7 +169,6 @@ func (m CollectionsModel) Update(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 func (m CollectionsModel) updateView(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case collectionsRefreshMsg:
-		log.Printf("[collections] updateView: received collectionsRefreshMsg, err=%v, count=%d", msg.Err, len(msg.Collections))
 		if msg.Err != nil {
 			m.refreshError = msg.Err.Error()
 			m.loaded = true
@@ -193,7 +198,6 @@ func (m CollectionsModel) updateView(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 				}
 			}
 			m.table.SetRows(rows)
-			log.Printf("[collections] updateView: table.SetRows called with %d rows, table.Rows()=%d", len(rows), len(m.table.Rows()))
 			m.loaded = true
 			m.table.Focus()
 		}
@@ -555,10 +559,7 @@ func loadCollectionsWithStats(dbConn *sql.DB) collectionsRefreshMsg {
 func (m CollectionsModel) doRefresh() tea.Cmd {
 	dbConn := m.DB
 	return func() tea.Msg {
-		log.Printf("[collections] doRefresh: querying DB for all collections")
-		msg := loadCollectionsWithStats(dbConn)
-		log.Printf("[collections] doRefresh: got %d collections, err=%v", len(msg.Collections), msg.Err)
-		return msg
+		return loadCollectionsWithStats(dbConn)
 	}
 }
 
