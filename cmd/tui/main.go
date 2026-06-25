@@ -949,12 +949,31 @@ func tagEnhancerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-cha
 
 func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent,
 	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, track db.ClaimedTrack, metrics *tui.Metrics,
-	iaLimiter *ratelimit.Limiter, bwLimiter *rate.Limiter, stopCh <-chan struct{}) bool {
+	iaLimiter *ratelimit.Limiter, bwLimiter *rate.Limiter, stopCh <-chan struct{}) (ok bool) {
 
 	trackLabel := track.Title
 	if trackLabel == "" {
 		trackLabel = track.Filename
 	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			ok = false
+			errMsg := fmt.Sprintf("panic: %v", r)
+			log.Printf("RECOVERED panic in analyzeTrack (track %d %q): %v\n%s", track.ID, trackLabel, r, debug.Stack())
+			dbMu.Lock()
+			db.RequeueTrackForRetry(sqlDB.Conn, track.ID, 3, errMsg)
+			dbMu.Unlock()
+			events <- tui.ActivityEvent{
+				Type:       tui.EventAnalysisFailed,
+				Timestamp:  time.Now(),
+				Identifier: trackLabel,
+				WorkerID:   workerID,
+				Message:    fmt.Sprintf("[%s] Recovered from panic on %s: %v", workerID, trackLabel, r),
+				Error:      errMsg,
+			}
+		}
+	}()
 
 	events <- tui.ActivityEvent{
 		Type:       tui.EventAnalysisStarted,
