@@ -81,6 +81,9 @@ type CollectionsModel struct {
 	progressErr     error
 
 	selectedColTitle string
+
+	prevAnalyzed  map[string]int
+	justCompleted map[string]time.Time
 }
 
 func NewCollectionsModel(sqlDB *sql.DB) CollectionsModel {
@@ -109,14 +112,16 @@ func NewCollectionsModel(sqlDB *sql.DB) CollectionsModel {
 	t.SetHeight(10)
 
 	return CollectionsModel{
-		DB:        sqlDB,
-		mode:      colModeView,
-		table:     t,
-		addID:     addID,
-		addTitle:  addTitle,
-		addQuery:  addQuery,
-		addCount:  addCount,
-		importURL: urlInput,
+		DB:            sqlDB,
+		mode:          colModeView,
+		table:         t,
+		addID:         addID,
+		addTitle:      addTitle,
+		addQuery:      addQuery,
+		addCount:      addCount,
+		importURL:     urlInput,
+		prevAnalyzed:  make(map[string]int),
+		justCompleted: make(map[string]time.Time),
 	}
 }
 
@@ -175,6 +180,7 @@ func (m CollectionsModel) updateView(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 		} else {
 			m.refreshError = ""
 			m.collections = msg.Collections
+			now := time.Now()
 			rows := make([]table.Row, len(msg.Collections))
 			for i, c := range msg.Collections {
 				source := c.SourceType
@@ -183,18 +189,36 @@ func (m CollectionsModel) updateView(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 				}
 				st := msg.Stats[c.CollectionID]
 				pct := "-"
+				status := c.Status
+				title := c.Title
+
 				if st.Total > 0 {
 					pct = fmt.Sprintf("%d%%", st.Analyzed*100/st.Total)
+					prev := m.prevAnalyzed[c.CollectionID]
+					if st.Analyzed == st.Total && prev < st.Total {
+						m.justCompleted[c.CollectionID] = now
+						title = "\u2714 " + title
+						pct = "\u2714 " + pct
+					} else if _, ok := m.justCompleted[c.CollectionID]; ok {
+						if now.Sub(m.justCompleted[c.CollectionID]) < 60*time.Second {
+							title = "\u2714 " + title
+							pct = "\u2714 " + pct
+						} else {
+							delete(m.justCompleted, c.CollectionID)
+						}
+					}
 				}
+
+				m.prevAnalyzed[c.CollectionID] = st.Analyzed
 				rows[i] = table.Row{
-					c.Title,
+					title,
 					source,
 					c.IAURL(),
 					c.CollectionID,
 					fmt.Sprintf("%d", st.Total),
 					fmt.Sprintf("%d", st.Analyzed),
 					pct,
-					c.Status,
+					status,
 				}
 			}
 			m.table.SetRows(rows)

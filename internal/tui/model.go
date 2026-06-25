@@ -57,6 +57,8 @@ type resourceTickMsg struct {
 	Stats ResourceStats
 }
 
+type collectionsTickMsg struct{}
+
 type MainModel struct {
 	Config    *config.Config
 	Tabs      []string
@@ -110,6 +112,7 @@ func (m MainModel) Init() tea.Cmd {
 		m.Dashboard.Init(),
 		waitForActivityEvent(m.Events),
 		m.resourceTick(),
+		m.collectionsTick(),
 	)
 }
 
@@ -303,11 +306,13 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case resourceTickMsg:
 		m.Resources = msg.Stats
-		cmds := []tea.Cmd{m.resourceTick()}
+		return m, m.resourceTick()
+
+	case collectionsTickMsg:
 		if m.ActiveTab == 4 && m.Collections.ShouldAutoRefresh() {
-			cmds = append(cmds, m.Collections.doRefresh())
+			return m, tea.Batch(m.Collections.doRefresh(), m.collectionsTick())
 		}
-		return m, tea.Batch(cmds...)
+		return m, m.collectionsTick()
 
 	case browseSearchMsg, browseSimilarMsg, browseAlbumSearchMsg, browseAlbumDetailMsg:
 		var cmd tea.Cmd
@@ -417,6 +422,12 @@ func (m MainModel) resourceTick() tea.Cmd {
 	dbPath := m.DBPath
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 		return resourceTickMsg{Stats: ComputeResourceStats(dbPath)}
+	})
+}
+
+func (m MainModel) collectionsTick() tea.Cmd {
+	return tea.Tick(15*time.Second, func(t time.Time) tea.Msg {
+		return collectionsTickMsg{}
 	})
 }
 

@@ -32,11 +32,13 @@ type CombinedStats struct {
 }
 
 type ClaimedTrack struct {
-	ID          int
-	AlbumID     string
-	Filename    string
-	Title       string
-	DownloadURL string
+	ID             int
+	AlbumID        string
+	Filename       string
+	Title          string
+	DownloadURL    string
+	AlbumTitle     string
+	CollectionName string
 }
 
 type TrackInsert struct {
@@ -532,7 +534,12 @@ func ClaimNextTrackBatch(db *sql.DB, workerID string, batchSize int) ([]ClaimedT
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	rows, err := tx.Query(
-		`SELECT t.id, t.album_id, t.filename, t.title, t.download_url FROM tracks t
+		`SELECT t.id, t.album_id, t.filename, t.title, t.download_url,
+		        COALESCE(a.title, a.ia_identifier),
+		        COALESCE((SELECT c.title FROM collection_albums ca
+		                  JOIN collections c ON ca.collection_id = c.collection_id
+		                  WHERE ca.album_id = t.album_id LIMIT 1), '')
+		 FROM tracks t
 		 INNER JOIN albums a ON t.album_id = a.ia_identifier
 		 WHERE t.status = 'pending' AND a.prechecked = 1
 		 ORDER BY t.id DESC
@@ -547,7 +554,7 @@ func ClaimNextTrackBatch(db *sql.DB, workerID string, batchSize int) ([]ClaimedT
 	var tracks []ClaimedTrack
 	for rows.Next() {
 		var t ClaimedTrack
-		if err := rows.Scan(&t.ID, &t.AlbumID, &t.Filename, &t.Title, &t.DownloadURL); err != nil {
+		if err := rows.Scan(&t.ID, &t.AlbumID, &t.Filename, &t.Title, &t.DownloadURL, &t.AlbumTitle, &t.CollectionName); err != nil {
 			return nil, err
 		}
 		tracks = append(tracks, t)

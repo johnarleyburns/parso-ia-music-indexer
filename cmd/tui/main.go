@@ -951,25 +951,33 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, track db.ClaimedTrack, metrics *tui.Metrics,
 	iaLimiter *ratelimit.Limiter, bwLimiter *rate.Limiter, stopCh <-chan struct{}) (ok bool) {
 
-	trackLabel := track.Title
-	if trackLabel == "" {
-		trackLabel = track.Filename
+	trackName := track.Title
+	if trackName == "" {
+		trackName = track.Filename
+	}
+	trackLabelShort := trackName
+	trackLabel := trackName
+	if track.AlbumTitle != "" {
+		trackLabel += "  [" + track.AlbumTitle + "]"
+	}
+	if track.CollectionName != "" {
+		trackLabel += "  (" + track.CollectionName + ")"
 	}
 
 	defer func() {
 		if r := recover(); r != nil {
 			ok = false
 			errMsg := fmt.Sprintf("panic: %v", r)
-			log.Printf("RECOVERED panic in analyzeTrack (track %d %q): %v\n%s", track.ID, trackLabel, r, debug.Stack())
+			log.Printf("RECOVERED panic in analyzeTrack (track %d %q): %v\n%s", track.ID, trackName, r, debug.Stack())
 			dbMu.Lock()
 			db.RequeueTrackForRetry(sqlDB.Conn, track.ID, 3, errMsg)
 			dbMu.Unlock()
 			events <- tui.ActivityEvent{
 				Type:       tui.EventAnalysisFailed,
 				Timestamp:  time.Now(),
-				Identifier: trackLabel,
+				Identifier: trackLabelShort,
 				WorkerID:   workerID,
-				Message:    fmt.Sprintf("[%s] Recovered from panic on %s: %v", workerID, trackLabel, r),
+				Message:    fmt.Sprintf("[%s] Recovered from panic on %s: %v", workerID, trackLabelShort, r),
 				Error:      errMsg,
 			}
 		}
