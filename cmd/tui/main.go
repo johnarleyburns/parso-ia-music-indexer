@@ -1000,7 +1000,9 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 		sleepOrStop(30*time.Second, stopCh)
 		return true
 	}
+	netStart := time.Now()
 	mp3Data, err := audio.StreamAudioFromURL(ctx, iaClient, track.DownloadURL, cfg.MaxBytes, bwLimiter)
+	metrics.RecordNetworkTime(time.Since(netStart))
 	cancel()
 	if err != nil {
 		errMsg := fmt.Sprintf("stream: %v", err)
@@ -1054,7 +1056,9 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 		return false
 	}
 
+	decodeStart := time.Now()
 	pcmSamples, sampleRate, err := audio.DecodeMP3(mp3Data)
+	metrics.RecordProcessingTime(time.Since(decodeStart))
 	if err != nil {
 		reason := fmt.Sprintf("decode: %v", err)
 		dbMu.Lock()
@@ -1080,10 +1084,12 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 		return true
 	}
 
+	qualityStart := time.Now()
 	snrDB := audio.CalculateSNR(pcmSamples)
 	centroidHz := audio.CalculateSpectralCentroid(pcmSamples, sampleRate)
 	crestFactor := audio.CalculateCrestFactor(pcmSamples)
 	compositeScore := audio.CalculateCompositeScore(snrDB, centroidHz, crestFactor)
+	metrics.RecordProcessingTime(time.Since(qualityStart))
 
 	if compositeScore < audio.QualityUnusable {
 		dbMu.Lock()
@@ -1100,12 +1106,16 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 		return true
 	}
 
+	featureStart := time.Now()
 	mfccVec := audio.ComputeMFCCPool(pcmSamples, sampleRate)
 	chromaVec := audio.ComputeChromaPool(pcmSamples)
+	pcmBytes := clap.Float32ToBytes(pcmSamples)
+	metrics.RecordProcessingTime(time.Since(featureStart))
 
 	clapCtx, clapCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	pcmBytes := clap.Float32ToBytes(pcmSamples)
+	clapStart := time.Now()
 	clapVec, err := clapClient.GetEmbedding(clapCtx, pcmBytes, int32(sampleRate))
+	metrics.RecordCLAPTime(time.Since(clapStart))
 	clapCancel()
 	if err != nil {
 		errMsg := fmt.Sprintf("clap: %v", err)

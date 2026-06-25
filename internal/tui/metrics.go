@@ -18,6 +18,11 @@ type byteRecord struct {
 	bytes int64
 }
 
+type durationRecord struct {
+	ts time.Time
+	d  time.Duration
+}
+
 type Metrics struct {
 	mu sync.Mutex
 
@@ -27,6 +32,10 @@ type Metrics struct {
 	analyzerCompletions  []time.Time
 	cleanerCompletions   []time.Time
 	enhancerCompletions  []time.Time
+
+	networkTimes    []durationRecord
+	clapTimes       []durationRecord
+	processingTimes []durationRecord
 }
 
 func NewMetrics() *Metrics {
@@ -69,6 +78,24 @@ func (m *Metrics) RecordEnhancerCompletion() {
 	m.mu.Unlock()
 }
 
+func (m *Metrics) RecordNetworkTime(d time.Duration) {
+	m.mu.Lock()
+	m.networkTimes = append(m.networkTimes, durationRecord{ts: time.Now(), d: d})
+	m.mu.Unlock()
+}
+
+func (m *Metrics) RecordCLAPTime(d time.Duration) {
+	m.mu.Lock()
+	m.clapTimes = append(m.clapTimes, durationRecord{ts: time.Now(), d: d})
+	m.mu.Unlock()
+}
+
+func (m *Metrics) RecordProcessingTime(d time.Duration) {
+	m.mu.Lock()
+	m.processingTimes = append(m.processingTimes, durationRecord{ts: time.Now(), d: d})
+	m.mu.Unlock()
+}
+
 func (m *Metrics) prune(now time.Time) {
 	cutoff := now.Add(-metricsWindow)
 
@@ -107,6 +134,18 @@ func (m *Metrics) prune(now time.Time) {
 		o++
 	}
 	m.enhancerCompletions = m.enhancerCompletions[o:]
+
+	m.networkTimes = pruneDurations(m.networkTimes, cutoff)
+	m.clapTimes = pruneDurations(m.clapTimes, cutoff)
+	m.processingTimes = pruneDurations(m.processingTimes, cutoff)
+}
+
+func pruneDurations(recs []durationRecord, cutoff time.Time) []durationRecord {
+	i := 0
+	for i < len(recs) && recs[i].ts.Before(cutoff) {
+		i++
+	}
+	return recs[i:]
 }
 
 func (m *Metrics) APIRate() float64 {
@@ -201,6 +240,36 @@ func (m *Metrics) EnhancerRate() float64 {
 		elapsed = 1
 	}
 	return float64(len(m.enhancerCompletions)) / elapsed
+}
+
+// AnalyzerTimeBreakdown returns the share of analyzer time spent on network
+// (streaming audio), CLAP (sidecar embedding), and local timbre processing
+// (decode + quality + feature extraction) over the metrics window, as
+// percentages summing to ~100. hasData is false when no analyzer work has been
+// recorded in the window.
+func (m *Metrics) AnalyzerTimeBreakdown() (netPct, clapPct, procPct float64, hasData bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	m.prune(now)
+
+	var net, clap, proc time.Duration
+	for _, r := range m.networkTimes {
+		net += r.d
+	}
+	for _, r := range m.clapTimes {
+		clap += r.d
+	}
+	for _, r := range m.processingTimes {
+		proc += r.d
+	}
+
+	total := net + clap + proc
+	if total <= 0 {
+		return 0, 0, 0, false
+	}
+	tf := float64(total)
+	return float64(net) / tf * 100, float64(clap) / tf * 100, float64(proc) / tf * 100, true
 }
 
 type InstrumentedTransport struct {

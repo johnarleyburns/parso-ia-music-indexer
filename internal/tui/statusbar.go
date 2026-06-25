@@ -67,6 +67,18 @@ func pctColor(pct float64) lipgloss.Style {
 	}
 }
 
+func analyzerSplit(metrics *Metrics, mutedVal lipgloss.Style) string {
+	netPct, clapPct, procPct, hasData := metrics.AnalyzerTimeBreakdown()
+	if !hasData {
+		return mutedVal.Render("\u2014")
+	}
+	netVal := lipgloss.NewStyle().Foreground(Secondary).Render(fmt.Sprintf("net %.0f%%", netPct))
+	clapVal := lipgloss.NewStyle().Foreground(Primary).Render(fmt.Sprintf("clap %.0f%%", clapPct))
+	procVal := lipgloss.NewStyle().Foreground(Success).Render(fmt.Sprintf("proc %.0f%%", procPct))
+	slash := mutedVal.Render(" / ")
+	return netVal + slash + clapVal + slash + procVal
+}
+
 func RenderStatusBar(metrics *Metrics, stats *db.CombinedStats, rs ResourceStats, width int) string {
 	if stats == nil {
 		stats = &db.CombinedStats{}
@@ -150,6 +162,7 @@ func RenderStatusBar(metrics *Metrics, stats *db.CombinedStats, rs ResourceStats
 	line2Parts := []string{
 		labelStyle.Render("Mem:") + " " + mutedVal.Render(fmt.Sprintf("%.0f MB", rs.MemAllocMB)),
 		labelStyle.Render("Disk:") + " " + mutedVal.Render(fmt.Sprintf("DB %.1f MB", rs.DBSizeMB)),
+		labelStyle.Render("Analyzer time:") + " " + analyzerSplit(metrics, mutedVal),
 	}
 
 	albumsDone := stats.Albums.Resolved
