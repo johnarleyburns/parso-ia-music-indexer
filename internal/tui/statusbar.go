@@ -104,7 +104,6 @@ func RenderStatusBar(metrics *Metrics, stats *db.CombinedStats, rs ResourceStats
 
 	resolverRate := metrics.ResolverRate()
 	analyzerRate := metrics.AnalyzerRate()
-	cleanerRate := metrics.CleanerRate()
 	enhancerRate := metrics.EnhancerRate()
 
 	var resolverETA string
@@ -127,16 +126,6 @@ func RenderStatusBar(metrics *Metrics, stats *db.CombinedStats, rs ResourceStats
 		analyzerETA = "\u2014"
 	}
 
-	var cleanerETA string
-	if cleanerRate > 0 && stats.Albums.Unprechecked > 0 {
-		secs := float64(stats.Albums.Unprechecked) / cleanerRate
-		cleanerETA = formatETA(time.Duration(secs) * time.Second)
-	} else if stats.Albums.Unprechecked == 0 {
-		cleanerETA = "done"
-	} else {
-		cleanerETA = "\u2014"
-	}
-
 	var enhancerETA string
 	if enhancerRate > 0 && stats.Tracks.UntaggedCount > 0 {
 		secs := float64(stats.Tracks.UntaggedCount) / enhancerRate
@@ -155,7 +144,6 @@ func RenderStatusBar(metrics *Metrics, stats *db.CombinedStats, rs ResourceStats
 		apiVal,
 		labelStyle.Render("Resolvers:") + " " + valStyle.Render(resolverETA),
 		labelStyle.Render("Analyzers:") + " " + valStyle.Render(analyzerETA),
-		labelStyle.Render("Cleaners:") + " " + valStyle.Render(cleanerETA),
 		labelStyle.Render("Enhancers:") + " " + valStyle.Render(enhancerETA),
 	}
 

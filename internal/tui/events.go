@@ -20,7 +20,6 @@ const (
 	EventAnalysisFailed       EventType = "analysis_failed"
 	EventAlbumResolving       EventType = "album_resolving"
 	EventAlbumResolved        EventType = "album_resolved"
-	EventAlbumPrechecked      EventType = "album_prechecked"
 	EventAlbumFailed          EventType = "album_failed"
 	EventAlbumUnavailable     EventType = "album_unavailable"
 	EventAnalysisUnavailable  EventType = "analysis_unavailable"

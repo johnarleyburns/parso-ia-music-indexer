@@ -30,7 +30,6 @@ type Metrics struct {
 	byteTransfers        []byteRecord
 	resolverCompletions  []time.Time
 	analyzerCompletions  []time.Time
-	cleanerCompletions   []time.Time
 	enhancerCompletions  []time.Time
 
 	networkTimes    []durationRecord
@@ -63,12 +62,6 @@ func (m *Metrics) RecordResolverCompletion() {
 func (m *Metrics) RecordAnalyzerCompletion() {
 	m.mu.Lock()
 	m.analyzerCompletions = append(m.analyzerCompletions, time.Now())
-	m.mu.Unlock()
-}
-
-func (m *Metrics) RecordCleanerCompletion() {
-	m.mu.Lock()
-	m.cleanerCompletions = append(m.cleanerCompletions, time.Now())
 	m.mu.Unlock()
 }
 
@@ -122,12 +115,6 @@ func (m *Metrics) prune(now time.Time) {
 		l++
 	}
 	m.analyzerCompletions = m.analyzerCompletions[l:]
-
-	n := 0
-	for n < len(m.cleanerCompletions) && m.cleanerCompletions[n].Before(cutoff) {
-		n++
-	}
-	m.cleanerCompletions = m.cleanerCompletions[n:]
 
 	o := 0
 	for o < len(m.enhancerCompletions) && m.enhancerCompletions[o].Before(cutoff) {
@@ -210,21 +197,6 @@ func (m *Metrics) AnalyzerRate() float64 {
 		elapsed = 1
 	}
 	return float64(len(m.analyzerCompletions)) / elapsed
-}
-
-func (m *Metrics) CleanerRate() float64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	now := time.Now()
-	m.prune(now)
-	if len(m.cleanerCompletions) == 0 {
-		return 0
-	}
-	elapsed := now.Sub(m.cleanerCompletions[0]).Seconds()
-	if elapsed < 1 {
-		elapsed = 1
-	}
-	return float64(len(m.cleanerCompletions)) / elapsed
 }
 
 func (m *Metrics) EnhancerRate() float64 {

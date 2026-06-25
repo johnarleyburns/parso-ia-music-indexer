@@ -1437,49 +1437,6 @@ func TestClaimNextTrackBatchOrdering(t *testing.T) {
 	}
 }
 
-func TestClaimUnprecheckedAlbumOrdering(t *testing.T) {
-	db := testDB(t)
-	db.Conn.Exec(`INSERT INTO albums(ia_identifier, title, status, prechecked, track_count, created_at) VALUES('old-resolved', 'Old', 'resolved', 0, 5, datetime('now', '-120 seconds'))`)
-	db.Conn.Exec(`INSERT INTO albums(ia_identifier, title, status, prechecked, track_count, created_at) VALUES('mid-resolved', 'Mid', 'resolved', 0, 5, datetime('now', '-60 seconds'))`)
-	db.Conn.Exec(`INSERT INTO albums(ia_identifier, title, status, prechecked, track_count, created_at) VALUES('new-resolved', 'New', 'resolved', 0, 5, datetime('now', '-0 seconds'))`)
-
-	r, err := ClaimUnprecheckedAlbum(db.Conn)
-	if err != nil {
-		t.Fatalf("ClaimUnprecheckedAlbum: %v", err)
-	}
-	if r == nil {
-		t.Fatal("expected to claim an album")
-	}
-	if r.IAIdentifier != "new-resolved" {
-		t.Errorf("newest first: expected new-resolved, got %s", r.IAIdentifier)
-	}
-	MarkAlbumPrechecked(db.Conn, r.IAIdentifier)
-
-	r, err = ClaimUnprecheckedAlbum(db.Conn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r == nil {
-		t.Fatal("expected second album")
-	}
-	if r.IAIdentifier != "mid-resolved" {
-		t.Errorf("second: expected mid-resolved, got %s", r.IAIdentifier)
-	}
-	MarkAlbumPrechecked(db.Conn, r.IAIdentifier)
-
-	r, err = ClaimUnprecheckedAlbum(db.Conn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r == nil {
-		t.Fatal("expected third album")
-	}
-	if r.IAIdentifier != "old-resolved" {
-		t.Errorf("oldest last: expected old-resolved, got %s", r.IAIdentifier)
-	}
-	MarkAlbumPrechecked(db.Conn, r.IAIdentifier)
-}
-
 func TestClaimUntaggedAlbumOrdering(t *testing.T) {
 	db := testDB(t)
 

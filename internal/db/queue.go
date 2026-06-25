@@ -7,13 +7,12 @@ import (
 )
 
 type AlbumStats struct {
-	Total        int
-	Pending      int
-	Resolving    int
-	Resolved     int
-	Failed       int
-	Unavailable  int
-	Unprechecked int
+	Total       int
+	Pending     int
+	Resolving   int
+	Resolved    int
+	Failed      int
+	Unavailable int
 }
 
 type TrackStats struct {
@@ -207,11 +206,6 @@ func GetCombinedStats(db *sql.DB) (*CombinedStats, error) {
 		WHERE t.status = 'completed' AND (t.tags IS NULL OR t.tags = '')`).Scan(&s.Tracks.UntaggedCount)
 	if err != nil {
 		s.Tracks.UntaggedCount = 0
-	}
-
-	err = db.QueryRow(`SELECT count(*) FROM albums WHERE status = 'resolved' AND prechecked = 0 AND track_count > 0`).Scan(&s.Albums.Unprechecked)
-	if err != nil {
-		s.Albums.Unprechecked = 0
 	}
 
 	return s, nil
@@ -541,7 +535,7 @@ func ClaimNextTrackBatch(db *sql.DB, workerID string, batchSize int) ([]ClaimedT
 		                  WHERE ca.album_id = t.album_id LIMIT 1), '')
 		 FROM tracks t
 		 INNER JOIN albums a ON t.album_id = a.ia_identifier
-		 WHERE t.status = 'pending' AND a.prechecked = 1
+		 WHERE t.status = 'pending'
 		 ORDER BY t.id DESC
 		 LIMIT ?`,
 		batchSize,
@@ -934,32 +928,4 @@ func FailAlbumAndPendingTracksUnavailable(sqlDB *sql.DB, albumID, reason string)
 	return skipped, tx.Commit()
 }
 
-func ClaimUnprecheckedAlbum(sqlDB *sql.DB) (*AlbumResult, error) {
-	var r AlbumResult
-	err := sqlDB.QueryRow(`SELECT a.ia_identifier, COALESCE(a.title, a.ia_identifier), COALESCE(a.creator, ''),
-			COALESCE(a.collection, ''), COALESCE(a.art_url, ''), a.track_count,
-			a.status, COALESCE((SELECT count(*) FROM tracks t WHERE t.album_id = a.ia_identifier AND t.status = 'completed'), 0),
-			COALESCE(a.downloads, 0),
-			COALESCE((SELECT AVG(e.quality_score) FROM tracks t INNER JOIN track_embeddings e ON t.id = e.track_id WHERE t.album_id = a.ia_identifier AND t.status = 'completed'), 0.0)
-		FROM albums a
-		WHERE a.status = 'resolved' AND a.prechecked = 0 AND a.track_count > 0
-		ORDER BY a.created_at DESC
-		LIMIT 1`).
-		Scan(&r.IAIdentifier, &r.Title, &r.Creator, &r.Collection, &r.ArtURL, &r.TrackCount, &r.Status, &r.CompletedCount, &r.Downloads, &r.AvgQuality)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("claim unprechecked album: %w", err)
-	}
-	return &r, nil
-}
 
-func MarkAlbumPrechecked(sqlDB *sql.DB, albumID string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := sqlDB.Exec(
-		`UPDATE albums SET prechecked = 1, updated_at = ? WHERE ia_identifier = ?`,
-		now, albumID,
-	)
-	return err
-}

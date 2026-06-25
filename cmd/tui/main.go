@@ -89,10 +89,6 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 	nextWorkerID := 1
 	workerStopChs := make(map[int]chan struct{})
 
-	cleanerCount := 0
-	nextCleanerID := 1
-	cleanerStopChs := make(map[int]chan struct{})
-
 	enhancerCount := 0
 	nextEnhancerID := 1
 	enhancerStopChs := make(map[int]chan struct{})
@@ -114,7 +110,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 	events <- tui.ActivityEvent{
 		Type:      tui.EventInfo,
 		Timestamp: time.Now(),
-		Message:   fmt.Sprintf("Application started. %s. [s] coordinator  [r] resolvers  [w] analyzers  [c] cleaners  [e] enhancers", collMsg),
+		Message:   fmt.Sprintf("Application started. %s. [s] coordinator  [r] resolvers  [w] analyzers  [e] enhancers", collMsg),
 	}
 
 	for {
@@ -204,35 +200,6 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 					}
 				}
 
-	case tui.CmdAddCleaner:
-		cleanerCount++
-		cID := fmt.Sprintf("cleaner-%d", nextCleanerID)
-		nextCleanerID++
-		stopCh := make(chan struct{})
-		cleanerStopChs[nextCleanerID-1] = stopCh
-			events <- tui.ActivityEvent{
-				Type:       tui.EventWorkerStarted,
-				Timestamp:  time.Now(),
-				Identifier: cID,
-				WorkerID:   cID,
-				Message:    fmt.Sprintf("Cleaner %s started (pool: %d)", cID, cleanerCount),
-			}
-			safeGo(func() { cleanupWorkerLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, cID, metrics) }, events, cID)
-		case tui.CmdRemoveCleaner:
-		if cleanerCount > 0 {
-			cleanerCount--
-			for id, ch := range cleanerStopChs {
-				close(ch)
-				delete(cleanerStopChs, id)
-				break
-			}
-			events <- tui.ActivityEvent{
-				Type:      tui.EventWorkerStopped,
-				Timestamp: time.Now(),
-				Message:   fmt.Sprintf("Cleaner removed (pool: %d)", cleanerCount),
-			}
-		}
-
 	case tui.CmdAddEnhancer:
 		enhancerCount++
 		eID := fmt.Sprintf("enhancer-%d", nextEnhancerID)
@@ -270,9 +237,6 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 					close(ch)
 				}
 		for _, ch := range workerStopChs {
-			close(ch)
-		}
-		for _, ch := range cleanerStopChs {
 			close(ch)
 		}
 		for _, ch := range enhancerStopChs {
@@ -582,114 +546,6 @@ func albumResolverLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-c
 		}
 
 		resolveAlbum(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, resolverID, albumID, metrics)
-		sleepOrStop(1*time.Second, stopCh)
-	}
-}
-
-func cleanupWorkerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
-	dbMu *sync.Mutex, iaClient *http.Client, iaLimiter *ratelimit.Limiter, workerID string, metrics *tui.Metrics) {
-	for {
-		select {
-		case <-stopCh:
-			return
-		default:
-		}
-
-		dbMu.Lock()
-		album, err := db.ClaimUnprecheckedAlbum(sqlDB.Conn)
-		dbMu.Unlock()
-		if err != nil {
-			events <- tui.ActivityEvent{
-				Type:      tui.EventInfo,
-				Timestamp: time.Now(),
-				WorkerID:  workerID,
-				Message:   fmt.Sprintf("[%s] Claim unprechecked album error: %v", workerID, err),
-				Error:     err.Error(),
-			}
-			sleepOrStop(30*time.Second, stopCh)
-			continue
-		}
-
-		if album == nil {
-			sleepOrStop(30*time.Second, stopCh)
-			continue
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := iaLimiter.Wait(ctx); err != nil {
-			cancel()
-			events <- tui.ActivityEvent{
-				Type:      tui.EventInfo,
-				Timestamp: time.Now(),
-				WorkerID:  workerID,
-				Message:   fmt.Sprintf("[%s] Rate limit wait error: %v", workerID, err),
-				Error:     err.Error(),
-			}
-			sleepOrStop(30*time.Second, stopCh)
-			continue
-		}
-
-		meta, err := ia.LookupAlbumMetadata(ctx, iaClient, album.IAIdentifier)
-		cancel()
-		if err != nil {
-			events <- tui.ActivityEvent{
-				Type:       tui.EventInfo,
-				Timestamp:  time.Now(),
-				Identifier: album.IAIdentifier,
-				WorkerID:   workerID,
-				Message:    fmt.Sprintf("[%s] Cleanup metadata error %s: %v", workerID, album.IAIdentifier, err),
-				Error:      err.Error(),
-			}
-			sleepOrStop(5*time.Second, stopCh)
-			continue
-		}
-
-		dbMu.Lock()
-		if meta.AccessRestrictedItem {
-			skipped, ferr := db.FailAlbumAndPendingTracksUnavailable(sqlDB.Conn, album.IAIdentifier, "access-restricted item (detected by cleanup)")
-			dbMu.Unlock()
-			if ferr != nil {
-				events <- tui.ActivityEvent{
-					Type:       tui.EventInfo,
-					Timestamp:  time.Now(),
-					Identifier: album.IAIdentifier,
-					WorkerID:   workerID,
-					Message:    fmt.Sprintf("[%s] Fail album error %s: %v", workerID, album.IAIdentifier, ferr),
-					Error:      ferr.Error(),
-				}
-			} else {
-				events <- tui.ActivityEvent{
-					Type:       tui.EventAlbumUnavailable,
-					Timestamp:  time.Now(),
-					Identifier: album.IAIdentifier,
-					WorkerID:   workerID,
-					Message:    fmt.Sprintf("[%s] Restricted album %s (%s), %d pending tracks unavailable", workerID, album.Title, album.IAIdentifier, skipped),
-				}
-			}
-		} else {
-			err = db.MarkAlbumPrechecked(sqlDB.Conn, album.IAIdentifier)
-			dbMu.Unlock()
-			if err != nil {
-				events <- tui.ActivityEvent{
-					Type:       tui.EventInfo,
-					Timestamp:  time.Now(),
-					Identifier: album.IAIdentifier,
-					WorkerID:   workerID,
-					Message:    fmt.Sprintf("[%s] Mark prechecked error %s: %v", workerID, album.IAIdentifier, err),
-					Error:      err.Error(),
-				}
-			} else {
-				events <- tui.ActivityEvent{
-					Type:       tui.EventAlbumPrechecked,
-					Timestamp:  time.Now(),
-					Identifier: album.IAIdentifier,
-					WorkerID:   workerID,
-					Message:    fmt.Sprintf("[%s] Clean %s (%d tracks available)", workerID, album.Title, album.TrackCount),
-				}
-			}
-		}
-
-		metrics.RecordCleanerCompletion()
 		sleepOrStop(1*time.Second, stopCh)
 	}
 }
@@ -1251,6 +1107,20 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan s
 			WorkerID:   workerID,
 			Message:    fmt.Sprintf("[%s] Album unavailable %s: %v", workerID, albumID, err),
 			Error:      err.Error(),
+		}
+		return
+	}
+
+	if album.AccessRestrictedItem {
+		dbMu.Lock()
+		db.FailAlbumAndPendingTracksUnavailable(sqlDB.Conn, albumID, "access-restricted item")
+		dbMu.Unlock()
+		events <- tui.ActivityEvent{
+			Type:       tui.EventAlbumUnavailable,
+			Timestamp:  time.Now(),
+			Identifier: albumID,
+			WorkerID:   workerID,
+			Message:    fmt.Sprintf("[%s] Access-restricted album %s", workerID, albumID),
 		}
 		return
 	}
