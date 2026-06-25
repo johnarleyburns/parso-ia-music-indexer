@@ -169,7 +169,7 @@ func TestChromaPool(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	chroma := ComputeChromaPool(samples)
+	chroma := ComputeChromaPool(samples, sr)
 	if len(chroma) != 12 {
 		t.Fatalf("expected 12-dim chroma, got %d", len(chroma))
 	}
@@ -198,7 +198,7 @@ func TestChromaPoolSilence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	chroma := ComputeChromaPool(samples)
+	chroma := ComputeChromaPool(samples, sr)
 	if len(chroma) != 12 {
 		t.Fatalf("expected 12-dim chroma, got %d", len(chroma))
 	}

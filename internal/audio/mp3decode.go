@@ -25,6 +25,9 @@ func DecodeMP3(data []byte) (samples []float64, sampleRate int, err error) {
 
 	sampleRate = decoder.SampleRate()
 
+	estimatedSamples := len(data) * 5
+	samples = make([]float64, 0, estimatedSamples)
+
 	buf := make([]byte, 4096)
 	for {
 		n, err := decoder.Read(buf)

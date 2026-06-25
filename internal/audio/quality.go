@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	qualityFrameSize = 2048
+	frameSize = 2048
 
 	snrMinDB     = 0.0
 	snrMaxDB     = 40.0
@@ -24,137 +24,144 @@ const (
 	snrKillThreshold = 10.0
 )
 
-func CalculateSNR(samples []float64) float64 {
-	if len(samples) == 0 {
-		return 0
+// QualityChroma holds SNR, spectral centroid, and chroma features computed
+// from a single unified FFT pass over 2048-sample frames.
+type QualityChroma struct {
+	SNR        float64
+	CentroidHz float64
+	Chroma     []float32
+}
+
+// ComputeQualityAndChroma performs a single FFT per 2048-sample frame,
+// extracting SNR, spectral centroid, and chroma energies from each spectrum.
+// This replaces three separate FFT passes (CalculateSNR, CalculateSpectralCentroid,
+// ComputeChromaPool) with one.
+func ComputeQualityAndChroma(samples []float64, sampleRate int) QualityChroma {
+	result := QualityChroma{
+		Chroma: make([]float32, 12),
 	}
 
-	numFrames := len(samples) / qualityFrameSize
-	if numFrames < 1 {
-		numFrames = 1
+	numFrames := len(samples) / frameSize
+	if numFrames == 0 {
+		return result
 	}
 
 	var totalSignalPower, totalNoisePower float64
+	var totalCentroidSum float64
 	totalBins := 0
+	validCentroidFrames := 0
+
+	mags := make([]float64, frameSize/2)
 
 	for f := 0; f < numFrames; f++ {
-		start := f * qualityFrameSize
-		end := start + qualityFrameSize
-		if end > len(samples) {
-			end = len(samples)
-		}
-		blockLen := end - start
-		block := make([]float64, blockLen)
-		copy(block, samples[start:end])
+		start := f * frameSize
+		block := samples[start : start+frameSize]
 
-		for i := range block {
-			block[i] *= hannWindow(i, blockLen)
+		windowed := make([]float64, frameSize)
+		for i, v := range block {
+			windowed[i] = v * hannWindow(i, frameSize)
 		}
 
-		nfft := 1
-		for nfft < blockLen {
-			nfft *= 2
-		}
-		padded := make([]float64, nfft)
-		copy(padded, block)
+		spectrum := fft.FFTReal(windowed)
+		halfSize := frameSize / 2
 
-		spectrum := fft.FFTReal(padded)
-		halfSize := nfft / 2
-
+		// Compute magnitude spectrum once
 		totalPower := 0.0
-		mags := make([]float64, halfSize)
 		for i := 0; i < halfSize; i++ {
 			mag := math.Hypot(real(spectrum[i]), imag(spectrum[i]))
 			mags[i] = mag
 			totalPower += mag * mag
 		}
 
-		if totalPower < 1e-20 {
-			continue
+		// --- SNR (signal/noise estimation via bottom-half-of-spectrum) ---
+		if totalPower >= 1e-20 {
+			sorted := make([]float64, halfSize)
+			copy(sorted, mags)
+			sort.Float64s(sorted)
+
+			noiseCount := halfSize / 2
+			if noiseCount < 1 {
+				noiseCount = 1
+			}
+
+			var noisePower float64
+			for i := 0; i < noiseCount; i++ {
+				noisePower += sorted[i] * sorted[i]
+			}
+
+			signalPower := totalPower - noisePower
+			totalSignalPower += signalPower
+			totalNoisePower += noisePower
+			totalBins++
 		}
 
-		sorted := make([]float64, halfSize)
-		copy(sorted, mags)
-		sort.Float64s(sorted)
-
-		noiseCount := halfSize / 2
-		if noiseCount < 1 {
-			noiseCount = 1
+		// --- Spectral Centroid ---
+		var weightedFreq, frameMagSum float64
+		for i := 0; i < halfSize; i++ {
+			mag := mags[i]
+			freq := float64(i) * float64(sampleRate) / float64(frameSize)
+			weightedFreq += freq * mag
+			frameMagSum += mag
+		}
+		if frameMagSum > 1e-12 {
+			totalCentroidSum += weightedFreq / frameMagSum
+			validCentroidFrames++
 		}
 
-		var noisePower float64
-		for i := 0; i < noiseCount; i++ {
-			noisePower += sorted[i] * sorted[i]
+		// --- Chroma ---
+		for i := 0; i < halfSize; i++ {
+			mag := mags[i]
+			freq := float64(i) * float64(sampleRate) / float64(frameSize)
+			if freq > 20.0 {
+				midiNote := 12*math.Log2(freq/440.0) + 69.0
+				noteBin := int(math.Round(midiNote)) % 12
+				if noteBin < 0 {
+					noteBin += 12
+				}
+				result.Chroma[noteBin] += float32(mag)
+			}
 		}
-
-		signalPower := totalPower - noisePower
-
-		totalSignalPower += signalPower
-		totalNoisePower += noisePower
-		totalBins++
 	}
 
+	// Finalize SNR
 	if totalBins == 0 || totalNoisePower < 1e-20 {
-		return snrMaxDB
+		result.SNR = snrMaxDB
+	} else if totalSignalPower < 1e-20 {
+		result.SNR = 0
+	} else {
+		snr := 10 * math.Log10(totalSignalPower/totalNoisePower)
+		if snr < 0 {
+			snr = 0
+		}
+		if snr > snrMaxDB {
+			snr = snrMaxDB
+		}
+		result.SNR = snr
 	}
 
-	if totalSignalPower < 1e-20 {
-		return 0
+	// Finalize Centroid
+	if validCentroidFrames > 0 {
+		result.CentroidHz = totalCentroidSum / float64(validCentroidFrames)
 	}
 
-	snr := 10 * math.Log10(totalSignalPower / totalNoisePower)
-	if snr < 0 {
-		return 0
+	// Finalize Chroma (average per frame)
+	for i := 0; i < 12; i++ {
+		result.Chroma[i] /= float32(numFrames)
 	}
-	if snr > snrMaxDB {
-		return snrMaxDB
-	}
-	return snr
+
+	return result
+}
+
+func CalculateSNR(samples []float64) float64 {
+	return ComputeQualityAndChroma(samples, 48000).SNR
+}
+
+func CalculateSpectralCentroid(samples []float64, sampleRate int) float64 {
+	return ComputeQualityAndChroma(samples, sampleRate).CentroidHz
 }
 
 func hannWindow(i, n int) float64 {
 	return 0.5 * (1 - math.Cos(2*math.Pi*float64(i)/float64(n-1)))
-}
-
-func CalculateSpectralCentroid(samples []float64, sampleRate int) float64 {
-	numFrames := len(samples) / qualityFrameSize
-	if numFrames == 0 {
-		return 0
-	}
-
-	var totalCentroid float64
-	validFrames := 0
-
-	for f := 0; f < numFrames; f++ {
-		block := make([]float64, qualityFrameSize)
-		copy(block, samples[f*qualityFrameSize:(f+1)*qualityFrameSize])
-
-		for i := range block {
-			block[i] *= hannWindow(i, qualityFrameSize)
-		}
-
-		spectrum := fft.FFTReal(block)
-		halfSize := qualityFrameSize / 2
-
-		var weightedSum, magSum float64
-		for i := 0; i < halfSize; i++ {
-			mag := math.Hypot(real(spectrum[i]), imag(spectrum[i]))
-			freq := float64(i) * float64(sampleRate) / float64(qualityFrameSize)
-			weightedSum += freq * mag
-			magSum += mag
-		}
-
-		if magSum > 1e-12 {
-			totalCentroid += weightedSum / magSum
-			validFrames++
-		}
-	}
-
-	if validFrames == 0 {
-		return 0
-	}
-
-	return totalCentroid / float64(validFrames)
 }
 
 func CalculateCrestFactor(samples []float64) float64 {
