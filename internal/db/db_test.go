@@ -32,6 +32,14 @@ func testAlbumInserts(ids ...string) []AlbumInsert {
 	return result
 }
 
+// testLinkAlbumToCollection inserts a minimal collection and links the album to it.
+func testLinkAlbumToCollection(db *sql.DB, collectionID, albumID string) {
+	db.Exec(`INSERT OR IGNORE INTO collections(collection_id, title, query, expected_count) VALUES(?, ?, ?, ?)`,
+		collectionID, "Collection "+collectionID, "q:"+collectionID, 1)
+	db.Exec(`INSERT OR IGNORE INTO collection_albums(collection_id, album_id) VALUES(?, ?)`,
+		collectionID, albumID)
+}
+
 func TestOpenMigrate(t *testing.T) {
 	db := testDB(t)
 
@@ -144,6 +152,8 @@ func TestBulkInsertAlbums(t *testing.T) {
 func TestClaimUnresolvedAlbum(t *testing.T) {
 	db := testDB(t)
 	BulkInsertAlbums(db.Conn, testAlbumInserts("album-a", "album-b"))
+	testLinkAlbumToCollection(db.Conn, "test-coll", "album-a")
+	testLinkAlbumToCollection(db.Conn, "test-coll", "album-b")
 
 	id, err := ClaimUnresolvedAlbum(db.Conn, "w1")
 	if err != nil {
@@ -191,7 +201,9 @@ func TestMarkAlbumResolved(t *testing.T) {
 
 func TestInsertTracksAndClaim(t *testing.T) {
 	db := testDB(t)
+	db.Conn.Exec(`INSERT INTO collections(collection_id, title, query, expected_count, created_at) VALUES('c-a', 'Coll A', 'q', 1, datetime('now'))`)
 	BulkInsertAlbums(db.Conn, testAlbumInserts("album-a"))
+	db.Conn.Exec(`INSERT INTO collection_albums(collection_id, album_id) VALUES('c-a', 'album-a')`)
 	MarkAlbumResolved(db.Conn, "album-a", "Album A", "", "", "", 0)
 	db.Conn.Exec(`UPDATE albums SET prechecked = 1 WHERE ia_identifier = 'album-a'`)
 
@@ -1355,16 +1367,26 @@ func TestGetAllCollectionsOrdering(t *testing.T) {
 
 func TestClaimUnresolvedAlbumOrdering(t *testing.T) {
 	db := testDB(t)
-	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('old-album', 'pending', datetime('now', '-120 seconds'))`)
-	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('mid-album', 'pending', datetime('now', '-60 seconds'))`)
-	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('new-album', 'pending', datetime('now', '-0 seconds'))`)
+	// Insert collections with different created_at — ordering is driven by
+	// collection freshness, not album created_at.
+	db.Conn.Exec(`INSERT INTO collections(collection_id, title, query, expected_count, created_at) VALUES('c-old', 'Old Coll', 'q', 1, datetime('now', '-120 seconds'))`)
+	db.Conn.Exec(`INSERT INTO collections(collection_id, title, query, expected_count, created_at) VALUES('c-mid', 'Mid Coll', 'q', 1, datetime('now', '-60 seconds'))`)
+	db.Conn.Exec(`INSERT INTO collections(collection_id, title, query, expected_count, created_at) VALUES('c-new', 'New Coll', 'q', 1, datetime('now', '-0 seconds'))`)
+	// Albums with created_at deliberately opposite of collection created_at
+	// to prove the resolver orders by collection, not album.
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('old-album', 'pending', datetime('now', '-0 seconds'))`)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('mid-album', 'pending', datetime('now', '-0 seconds'))`)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('new-album', 'pending', datetime('now', '-120 seconds'))`)
+	db.Conn.Exec(`INSERT INTO collection_albums(collection_id, album_id) VALUES('c-old', 'old-album')`)
+	db.Conn.Exec(`INSERT INTO collection_albums(collection_id, album_id) VALUES('c-mid', 'mid-album')`)
+	db.Conn.Exec(`INSERT INTO collection_albums(collection_id, album_id) VALUES('c-new', 'new-album')`)
 
 	id, err := ClaimUnresolvedAlbum(db.Conn, "w1")
 	if err != nil {
 		t.Fatalf("ClaimUnresolvedAlbum: %v", err)
 	}
 	if id != "new-album" {
-		t.Errorf("expected newest album first, got %s (want new-album)", id)
+		t.Errorf("newest collection first: expected new-album (c-new), got %s", id)
 	}
 
 	id, err = ClaimUnresolvedAlbum(db.Conn, "w2")
@@ -1372,7 +1394,7 @@ func TestClaimUnresolvedAlbumOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 	if id != "mid-album" {
-		t.Errorf("expected second newest, got %s (want mid-album)", id)
+		t.Errorf("second newest collection: expected mid-album (c-mid), got %s", id)
 	}
 
 	id, err = ClaimUnresolvedAlbum(db.Conn, "w3")
@@ -1380,15 +1402,21 @@ func TestClaimUnresolvedAlbumOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 	if id != "old-album" {
-		t.Errorf("expected oldest last, got %s (want old-album)", id)
+		t.Errorf("oldest collection last: expected old-album (c-old), got %s", id)
 	}
 }
 
 func TestClaimUnresolvedAlbumBatchOrdering(t *testing.T) {
 	db := testDB(t)
-	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('a1', 'pending', datetime('now', '-90 seconds'))`)
-	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('a2', 'pending', datetime('now', '-60 seconds'))`)
-	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('a3', 'pending', datetime('now', '-30 seconds'))`)
+	db.Conn.Exec(`INSERT INTO collections(collection_id, title, query, expected_count, created_at) VALUES('c1', 'Coll 1', 'q', 1, datetime('now', '-90 seconds'))`)
+	db.Conn.Exec(`INSERT INTO collections(collection_id, title, query, expected_count, created_at) VALUES('c2', 'Coll 2', 'q', 1, datetime('now', '-60 seconds'))`)
+	db.Conn.Exec(`INSERT INTO collections(collection_id, title, query, expected_count, created_at) VALUES('c3', 'Coll 3', 'q', 1, datetime('now', '-30 seconds'))`)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('a1', 'pending', datetime('now', '-0 seconds'))`)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('a2', 'pending', datetime('now', '-0 seconds'))`)
+	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, created_at) VALUES('a3', 'pending', datetime('now', '-0 seconds'))`)
+	db.Conn.Exec(`INSERT INTO collection_albums(collection_id, album_id) VALUES('c1', 'a1')`)
+	db.Conn.Exec(`INSERT INTO collection_albums(collection_id, album_id) VALUES('c2', 'a2')`)
+	db.Conn.Exec(`INSERT INTO collection_albums(collection_id, album_id) VALUES('c3', 'a3')`)
 
 	ids, err := ClaimUnresolvedAlbumBatch(db.Conn, "w1", 3)
 	if err != nil {
@@ -1398,24 +1426,24 @@ func TestClaimUnresolvedAlbumBatchOrdering(t *testing.T) {
 		t.Fatalf("expected 3 claimed, got %d", len(ids))
 	}
 	if ids[0] != "a3" {
-		t.Errorf("newest first: expected a3, got %s", ids[0])
+		t.Errorf("newest collection first: expected a3 (c3), got %s", ids[0])
 	}
 	if ids[1] != "a2" {
-		t.Errorf("second: expected a2, got %s", ids[1])
+		t.Errorf("second: expected a2 (c2), got %s", ids[1])
 	}
 	if ids[2] != "a1" {
-		t.Errorf("oldest last: expected a1, got %s", ids[2])
+		t.Errorf("oldest last: expected a1 (c1), got %s", ids[2])
 	}
 }
 
 func TestClaimNextTrackBatchOrdering(t *testing.T) {
 	db := testDB(t)
+	db.Conn.Exec(`INSERT INTO collections(collection_id, title, query, expected_count, created_at) VALUES('c-x', 'Coll X', 'q', 1, datetime('now', '-0 seconds'))`)
 	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, prechecked, created_at) VALUES('album-x', 'resolved', 1, datetime('now', '-60 seconds'))`)
-	// Tracks are claimed in insertion order (ascending id) so that tracks from
-	// the newest collections (resolved first, lower ids) are analyzed before
-	// tracks from older collections (resolved later, higher ids).
-	// created_at is deliberately staged to CONTRADICT insertion order so this
-	// test proves the claim query orders by t.id ASC, not t.created_at.
+	db.Conn.Exec(`INSERT INTO collection_albums(collection_id, album_id) VALUES('c-x', 'album-x')`)
+	// Tracks are deliberately given created_at values that contradict insertion
+	// order to prove the query orders by t.id ASC (not t.created_at) within
+	// the same collection.
 	db.Conn.Exec(`INSERT INTO tracks(album_id, filename, title, download_url, status, created_at) VALUES('album-x', 'first.mp3', 'First', 'https://x/1', 'pending', datetime('now', '-10 seconds'))`)  // id=1, newest created_at
 	db.Conn.Exec(`INSERT INTO tracks(album_id, filename, title, download_url, status, created_at) VALUES('album-x', 'second.mp3', 'Second', 'https://x/2', 'pending', datetime('now', '-300 seconds'))`) // id=2, oldest created_at
 	db.Conn.Exec(`INSERT INTO tracks(album_id, filename, title, download_url, status, created_at) VALUES('album-x', 'third.mp3', 'Third', 'https://x/3', 'pending', datetime('now', '-120 seconds'))`)  // id=3, middle created_at
@@ -1427,15 +1455,15 @@ func TestClaimNextTrackBatchOrdering(t *testing.T) {
 	if len(claimed) != 3 {
 		t.Fatalf("expected 3 claimed, got %d", len(claimed))
 	}
-	// Earliest inserted track (lowest id) must come first, regardless of created_at.
+	// Within the same collection, tracks are ordered by lowest id first.
 	if claimed[0].Title != "First" {
-		t.Errorf("earliest inserted first: expected First (id=1), got %s", claimed[0].Title)
+		t.Errorf("lowest id first: expected First (id=1), got %s", claimed[0].Title)
 	}
 	if claimed[1].Title != "Second" {
 		t.Errorf("second: expected Second (id=2), got %s", claimed[1].Title)
 	}
 	if claimed[2].Title != "Third" {
-		t.Errorf("latest inserted last: expected Third (id=3), got %s", claimed[2].Title)
+		t.Errorf("highest id last: expected Third (id=3), got %s", claimed[2].Title)
 	}
 }
 

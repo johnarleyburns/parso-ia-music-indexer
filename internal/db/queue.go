@@ -292,7 +292,13 @@ func ClaimUnresolvedAlbum(db *sql.DB, workerID string) (string, error) {
 
 	var identifier string
 	err = tx.QueryRow(
-		`SELECT ia_identifier FROM albums WHERE status = 'pending' ORDER BY created_at DESC LIMIT 1`,
+		`SELECT a.ia_identifier FROM albums a
+		 JOIN collection_albums ca ON ca.album_id = a.ia_identifier
+		 JOIN collections c ON ca.collection_id = c.collection_id
+		 WHERE a.status = 'pending'
+		 GROUP BY a.ia_identifier
+		 ORDER BY MAX(c.created_at) DESC, a.created_at ASC
+		 LIMIT 1`,
 	).Scan(&identifier)
 	if err == sql.ErrNoRows {
 		return "", nil
@@ -326,7 +332,13 @@ func ClaimUnresolvedAlbumBatch(db *sql.DB, workerID string, batchSize int) ([]st
 	defer tx.Rollback()
 
 	rows, err := tx.Query(
-		`SELECT ia_identifier FROM albums WHERE status = 'pending' ORDER BY created_at DESC LIMIT ?`,
+		`SELECT a.ia_identifier FROM albums a
+		 JOIN collection_albums ca ON ca.album_id = a.ia_identifier
+		 JOIN collections c ON ca.collection_id = c.collection_id
+		 WHERE a.status = 'pending'
+		 GROUP BY a.ia_identifier
+		 ORDER BY MAX(c.created_at) DESC, a.created_at ASC
+		 LIMIT ?`,
 		batchSize,
 	)
 	if err != nil {
@@ -536,7 +548,11 @@ func ClaimNextTrackBatch(db *sql.DB, workerID string, batchSize int) ([]ClaimedT
 		 FROM tracks t
 		 INNER JOIN albums a ON t.album_id = a.ia_identifier
 		 WHERE t.status = 'pending'
-		 ORDER BY t.id ASC
+		 ORDER BY (
+		     SELECT MAX(c.created_at) FROM collection_albums ca
+		     JOIN collections c ON ca.collection_id = c.collection_id
+		     WHERE ca.album_id = t.album_id
+		 ) DESC, t.id ASC
 		 LIMIT ?`,
 		batchSize,
 	)
