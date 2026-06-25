@@ -536,7 +536,7 @@ func ClaimNextTrackBatch(db *sql.DB, workerID string, batchSize int) ([]ClaimedT
 		 FROM tracks t
 		 INNER JOIN albums a ON t.album_id = a.ia_identifier
 		 WHERE t.status = 'pending'
-		 ORDER BY t.id DESC
+		 ORDER BY t.id ASC
 		 LIMIT ?`,
 		batchSize,
 	)
