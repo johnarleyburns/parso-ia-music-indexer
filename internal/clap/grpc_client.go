@@ -19,6 +19,13 @@ type grpcCLAPClient struct {
 
 const maxMsgSize = 50 * 1024 * 1024
 
+// maxPCMBytes caps the audio payload sent to the sidecar so a request can never
+// exceed maxMsgSize (gRPC refuses to send larger messages). It is a multiple of
+// 4 so truncation never splits a float32 sample, which the sidecar reads via
+// np.frombuffer(dtype=float32). CLAP processes a bounded window internally, so
+// trimming the tail of very long tracks does not meaningfully affect embeddings.
+const maxPCMBytes = 32 * 1024 * 1024
+
 func NewGRPCClient(host string, port int) (CLAPClient, error) {
 	target := fmt.Sprintf("%s:%d", host, port)
 	conn, err := grpc.NewClient(target,
@@ -48,6 +55,9 @@ func NewGRPCClient(host string, port int) (CLAPClient, error) {
 }
 
 func (c *grpcCLAPClient) GetEmbedding(ctx context.Context, pcmData []byte, sampleRate int32) ([]float32, error) {
+	if len(pcmData) > maxPCMBytes {
+		pcmData = pcmData[:maxPCMBytes]
+	}
 	resp, err := c.client.GetEmbedding(ctx, &pb.EmbeddingRequest{
 		PcmData:    pcmData,
 		SampleRate: sampleRate,

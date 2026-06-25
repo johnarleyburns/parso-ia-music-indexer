@@ -89,6 +89,15 @@ func TestNewGRPCClientUnreachable(t *testing.T) {
 	}
 }
 
+func TestMaxPCMBytesInvariants(t *testing.T) {
+	if maxPCMBytes >= maxMsgSize {
+		t.Fatalf("maxPCMBytes (%d) must stay below maxMsgSize (%d) to avoid 'message larger than max'", maxPCMBytes, maxMsgSize)
+	}
+	if maxPCMBytes%4 != 0 {
+		t.Fatalf("maxPCMBytes (%d) must be a multiple of 4 so truncation never splits a float32 sample", maxPCMBytes)
+	}
+}
+
 func TestMockClientTextEmbeddingDimensions(t *testing.T) {
 	c := NewMockClient()
 	vec, err := c.GetTextEmbedding(context.Background(), "melancholy piano")
