@@ -216,8 +216,8 @@ func TestInsertTracksAndClaim(t *testing.T) {
 	if len(claimed) != 2 {
 		t.Fatalf("expected 2 claimed, got %d", len(claimed))
 	}
-	if claimed[0].Title != "Song One" || claimed[1].Title != "Song Two" {
-		t.Errorf("unexpected tracks: %+v, %+v", claimed[0], claimed[1])
+	if claimed[0].Title != "Song Three" || claimed[1].Title != "Song Two" {
+		t.Errorf("unexpected tracks (expected newest id first): %+v, %+v", claimed[0], claimed[1])
 	}
 
 	stats, _ := GetCombinedStats(db.Conn)
@@ -1411,9 +1411,12 @@ func TestClaimUnresolvedAlbumBatchOrdering(t *testing.T) {
 func TestClaimNextTrackBatchOrdering(t *testing.T) {
 	db := testDB(t)
 	db.Conn.Exec(`INSERT INTO albums(ia_identifier, status, prechecked, created_at) VALUES('album-x', 'resolved', 1, datetime('now', '-60 seconds'))`)
-	db.Conn.Exec(`INSERT INTO tracks(album_id, filename, title, download_url, status, created_at) VALUES('album-x', 'old.mp3', 'Old', 'https://x/1', 'pending', datetime('now', '-90 seconds'))`)
-	db.Conn.Exec(`INSERT INTO tracks(album_id, filename, title, download_url, status, created_at) VALUES('album-x', 'mid.mp3', 'Mid', 'https://x/2', 'pending', datetime('now', '-60 seconds'))`)
-	db.Conn.Exec(`INSERT INTO tracks(album_id, filename, title, download_url, status, created_at) VALUES('album-x', 'new.mp3', 'New', 'https://x/3', 'pending', datetime('now', '-30 seconds'))`)
+	// Insertion order (autoincrement id) is the source of truth for recency.
+	// created_at is deliberately staged to CONTRADICT insertion order so this
+	// test proves the claim query orders by t.id DESC, not t.created_at.
+	db.Conn.Exec(`INSERT INTO tracks(album_id, filename, title, download_url, status, created_at) VALUES('album-x', 'first.mp3', 'First', 'https://x/1', 'pending', datetime('now', '-10 seconds'))`)  // id=1, newest created_at
+	db.Conn.Exec(`INSERT INTO tracks(album_id, filename, title, download_url, status, created_at) VALUES('album-x', 'second.mp3', 'Second', 'https://x/2', 'pending', datetime('now', '-300 seconds'))`) // id=2, oldest created_at
+	db.Conn.Exec(`INSERT INTO tracks(album_id, filename, title, download_url, status, created_at) VALUES('album-x', 'third.mp3', 'Third', 'https://x/3', 'pending', datetime('now', '-120 seconds'))`)  // id=3, middle created_at
 
 	claimed, err := ClaimNextTrackBatch(db.Conn, "w1", 3)
 	if err != nil {
@@ -1422,14 +1425,15 @@ func TestClaimNextTrackBatchOrdering(t *testing.T) {
 	if len(claimed) != 3 {
 		t.Fatalf("expected 3 claimed, got %d", len(claimed))
 	}
-	if claimed[0].Title != "New" {
-		t.Errorf("newest first: expected New, got %s", claimed[0].Title)
+	// Most recently inserted track (highest id) must come first, regardless of created_at.
+	if claimed[0].Title != "Third" {
+		t.Errorf("newest inserted first: expected Third (id=3), got %s", claimed[0].Title)
 	}
-	if claimed[1].Title != "Mid" {
-		t.Errorf("second: expected Mid, got %s", claimed[1].Title)
+	if claimed[1].Title != "Second" {
+		t.Errorf("second: expected Second (id=2), got %s", claimed[1].Title)
 	}
-	if claimed[2].Title != "Old" {
-		t.Errorf("oldest last: expected Old, got %s", claimed[2].Title)
+	if claimed[2].Title != "First" {
+		t.Errorf("oldest inserted last: expected First (id=1), got %s", claimed[2].Title)
 	}
 }
 
