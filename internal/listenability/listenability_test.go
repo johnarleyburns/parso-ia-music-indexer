@@ -153,6 +153,162 @@ func TestTitlePatternReasons(t *testing.T) {
 	}
 }
 
+func TestPromptEvidenceHelpers(t *testing.T) {
+	musicVec := make([]float32, 512)
+	for i := range musicVec {
+		musicVec[i] = 1.0
+	}
+
+	sfxVec := make([]float32, 512)
+	for i := range sfxVec {
+		sfxVec[i] = -1.0
+	}
+
+	musicDP := dotProd(musicVec, musicVec)
+	sfxDP := dotProd(musicVec, sfxVec)
+
+	if musicDP <= 0 {
+		t.Errorf("music dot self = %.4f, want positive", musicDP)
+	}
+	if sfxDP >= 0 {
+		t.Errorf("music dot sfx = %.4f, want negative", sfxDP)
+	}
+}
+
+func dotProd(a, b []float32) float64 {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	var sum float64
+	for i := 0; i < n; i++ {
+		sum += float64(a[i]) * float64(b[i])
+	}
+	return sum
+}
+
+func TestAlbumEvidenceZeroTracks(t *testing.T) {
+	ev := AlbumEvidence{PositiveDurationCnt: 0}
+	r := ScoreAlbum(ev)
+	if r.Score != 0 {
+		t.Errorf("empty album score = %.4f, want 0", r.Score)
+	}
+}
+
+func TestAlbumEvidenceAllLongTracks(t *testing.T) {
+	ev := AlbumEvidence{
+		PositiveDurationCnt: 10,
+		AvgDurationSec:      600,
+		Short60Ratio:        0.0,
+		Short30Ratio:        0.0,
+		Short90Ratio:        0.0,
+		TrackCount:          10,
+		Title:               "Symphony",
+		Creator:             "Orchestra",
+	}
+	r := ScoreAlbum(ev)
+	if r.Score < 0.5 {
+		t.Errorf("all-long album score = %.4f, want >= 0.5", r.Score)
+	}
+}
+
+func TestScoreCompositionWeights(t *testing.T) {
+	ev := TrackEvidence{
+		DurationSec:  200,
+		QualityScore: 0.9,
+		Title:        "Good Song",
+		Filename:     "good.mp3",
+		Tags:         "rock",
+		BitrateKbps:  256,
+		Album: AlbumEvidence{
+			PositiveDurationCnt: 10,
+			AvgDurationSec:      200,
+			Short60Ratio:        0.1,
+		},
+	}
+	r := ScoreTrack(ev)
+	if r.Score < 0.7 || r.Score > 0.9 {
+		t.Errorf("ScoreTrack = %.4f, want in [0.70, 0.90]", r.Score)
+	}
+	if r.Decision != "include" {
+		t.Errorf("decision = %q, want include", r.Decision)
+	}
+}
+
+func TestStreamClassificationEdges(t *testing.T) {
+	tests := []struct {
+		name     string
+		duration float64
+		score    float64
+		album    AlbumEvidence
+		want     string
+	}{
+		{"zero_dur", 0, 0.9, AlbumEvidence{}, "excluded"},
+		{"under_60", 30, 0.9, AlbumEvidence{}, "excluded"},
+		{"above_1500", 1600, 0.9, AlbumEvidence{}, "excluded"},
+		{"longform_good", 1000, 0.6, AlbumEvidence{}, "longform_candidate"},
+		{"longform_poor", 1000, 0.2, AlbumEvidence{}, "excluded"},
+		{"default_include", 200, 0.9, AlbumEvidence{}, "default"},
+		{"default_demote", 200, 0.4, AlbumEvidence{}, "default"},
+		{"default_exclude", 200, 0.1, AlbumEvidence{}, "excluded"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ev := TrackEvidence{
+				DurationSec: tt.duration,
+				Album:       tt.album,
+			}
+			r := Result{Score: tt.score}
+			stream, _ := classifyStreamDecision(ev, r)
+			if stream != tt.want {
+				t.Errorf("stream = %q, want %q", stream, tt.want)
+			}
+		})
+	}
+}
+
+func TestAlbumStreamClassification(t *testing.T) {
+	nonMusicAlbum := AlbumEvidence{
+		Title:               "Sound Effects Library",
+		Creator:             "SFX Studio",
+		Subjects:            "Sound Effects; Audio",
+		PositiveDurationCnt: 10,
+		AvgDurationSec:      180,
+	}
+	r := ScoreAlbum(nonMusicAlbum)
+	if r.Stream != "excluded" {
+		t.Errorf("non-music album stream = %q, want 'excluded'", r.Stream)
+	}
+
+	shortAlbum := AlbumEvidence{
+		Title:               "Channel Dump",
+		TrackCount:          25,
+		PositiveDurationCnt: 25,
+		AvgDurationSec:      0.03,
+		Short60Ratio:        1.0,
+	}
+	r = ScoreAlbum(shortAlbum)
+	if r.Stream != "excluded" {
+		t.Errorf("channel dump album stream = %q, want 'excluded'", r.Stream)
+	}
+}
+
+func TestNoFalsePositiveOnMusicMetadata(t *testing.T) {
+	albums := []AlbumEvidence{
+		{Title: "Rolling Stones Greatest Hits", Creator: "Rolling Stones", Subjects: "Rock; Blues", Genres: "Rock"},
+		{Title: "Symphony No 5", Creator: "Beethoven Orchestra", Subjects: "Classical; Orchestra", Genres: "Classical"},
+		{Title: "Electric Guitar Solos", Creator: "Various Artists", Subjects: "Guitar; Instrumental", Genres: "Rock"},
+		{Title: "Jazz Standards Collection", Creator: "Miles Davis", Subjects: "Jazz; Trumpet", Genres: "Jazz"},
+	}
+
+	for _, a := range albums {
+		if IsNonMusicMetadata(a.Title, a.Creator, a.Subjects, a.Genres) {
+			t.Errorf("false positive: %q classified as non-music", a.Title)
+		}
+	}
+}
+
 func TestIsNonMusicMetadata(t *testing.T) {
 	tests := []struct {
 		name     string

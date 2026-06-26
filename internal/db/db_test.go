@@ -973,7 +973,7 @@ func TestRemoveCollection(t *testing.T) {
 func TestEncodeDecodeF16Roundtrip(t *testing.T) {
 	orig := []float32{0.0, 0.5, -0.5, 1.0, -1.0, 0.123, -0.987}
 	blob := encodeF16(orig)
-	decoded := decodeF16(blob)
+	decoded := DecodeF16(blob)
 	if len(decoded) != len(orig) {
 		t.Fatalf("expected %d elements, got %d", len(orig), len(decoded))
 	}
@@ -995,7 +995,7 @@ func TestEncodeF16BlobSize(t *testing.T) {
 
 func TestEncodeDecodeF16Zero(t *testing.T) {
 	v := make([]float32, 10)
-	decoded := decodeF16(encodeF16(v))
+	decoded := DecodeF16(encodeF16(v))
 	for i, f := range decoded {
 		if f != 0 {
 			t.Errorf("dim[%d]: expected 0, got %f", i, f)
@@ -1005,7 +1005,7 @@ func TestEncodeDecodeF16Zero(t *testing.T) {
 
 func TestEncodeDecodeF16Negative(t *testing.T) {
 	v := []float32{-0.1, -0.5, -1.0}
-	decoded := decodeF16(encodeF16(v))
+	decoded := DecodeF16(encodeF16(v))
 	for i := range v {
 		if decoded[i] >= 0 {
 			t.Errorf("dim[%d]: expected negative, got %f", i, decoded[i])
@@ -1019,7 +1019,7 @@ func TestEncodeDecodeF16NormalizedCLAPValues(t *testing.T) {
 		v[i] = float32(i-256) / 512.0
 	}
 	v = l2Normalize(v)
-	decoded := decodeF16(encodeF16(v))
+	decoded := DecodeF16(encodeF16(v))
 	for i := range v {
 		diff := math.Abs(float64(decoded[i] - v[i]))
 		if diff > 1e-3 {
@@ -1068,10 +1068,10 @@ func TestL2NormalizeIdempotent(t *testing.T) {
 func TestDotProduct(t *testing.T) {
 	a := []float32{1, 0, 0}
 	b := []float32{0, 1, 0}
-	if d := dotProduct(a, b); math.Abs(d) > 1e-6 {
+	if d := DotProduct(a, b); math.Abs(d) > 1e-6 {
 		t.Errorf("expected 0 for orthogonal, got %f", d)
 	}
-	if d := dotProduct(a, a); math.Abs(d-1.0) > 1e-6 {
+	if d := DotProduct(a, a); math.Abs(d-1.0) > 1e-6 {
 		t.Errorf("expected 1 for self, got %f", d)
 	}
 }
@@ -1079,7 +1079,7 @@ func TestDotProduct(t *testing.T) {
 func TestDotProductNormalized(t *testing.T) {
 	a := l2Normalize([]float32{3, 4})
 	b := l2Normalize([]float32{3, 4})
-	d := dotProduct(a, b)
+	d := DotProduct(a, b)
 	if math.Abs(d-1.0) > 1e-5 {
 		t.Errorf("expected ~1 for identical unit vectors, got %f", d)
 	}
@@ -1519,4 +1519,106 @@ func TestClaimUntaggedAlbumOrdering(t *testing.T) {
 		t.Errorf("oldest last: expected a-old, got %s", album.IAIdentifier)
 	}
 	UpdateTracksTags(db.Conn, album.IAIdentifier, "tagged")
+}
+
+func TestDecodeF16Roundtrip(t *testing.T) {
+	input := []float32{0.0, 1.0, -1.0, 0.5, -0.5, 2.0, -2.0, 100.0, -100.0}
+	encoded := encodeF16(input)
+	decoded := DecodeF16(encoded)
+	if len(decoded) != len(input) {
+		t.Fatalf("length mismatch: %d vs %d", len(decoded), len(input))
+	}
+	for i := range input {
+		if absDiff(decoded[i], input[i]) > 0.05 {
+			t.Errorf("index %d: got %.6f, want %.6f (diff %.6f)", i, decoded[i], input[i], absDiff(decoded[i], input[i]))
+		}
+	}
+}
+
+func TestDotProductKnown(t *testing.T) {
+	a := []float32{1, 2, 3}
+	b := []float32{4, 5, 6}
+	got := DotProduct(a, b)
+	expected := 1*4 + 2*5 + 3*6
+	if float64(got) != float64(expected) {
+		t.Errorf("DotProduct = %.4f, want %.4f", got, float64(expected))
+	}
+}
+
+func absDiff(a, b float32) float32 {
+	if a > b {
+		return a - b
+	}
+	return b - a
+}
+
+func TestListenabilityClaimUpdateFlow(t *testing.T) {
+	db := testDB(t)
+	BulkInsertAlbums(db.Conn, testAlbumInserts("listen-test"))
+	MarkAlbumResolved(db.Conn, "listen-test", "Music Album", "Artist", "Collection", "", 0)
+	db.Conn.Exec(`UPDATE albums SET prechecked = 1 WHERE ia_identifier = 'listen-test'`)
+
+	InsertTracks(db.Conn, "listen-test", []TrackInsert{
+		{Filename: "song1.mp3", Title: "Good Song", TrackNumber: 1, Format: "VBR MP3", Bitrate: 192, Duration: 180, DownloadURL: "https://example.com/s1.mp3"},
+		{Filename: "song2.mp3", Title: "Short Clip", TrackNumber: 2, Format: "VBR MP3", Bitrate: 128, Duration: 10, DownloadURL: "https://example.com/s2.mp3"},
+	})
+
+	claimed, err := ClaimNextTrackBatch(db.Conn, "w1", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("expected 1 claimed, got %d", len(claimed))
+	}
+
+	if claimed[0].Duration != 180 {
+		t.Errorf("duration = %.1f, want 180", claimed[0].Duration)
+	}
+	if claimed[0].Bitrate != 192 {
+		t.Errorf("bitrate = %d, want 192", claimed[0].Bitrate)
+	}
+
+	albEv, err := GetAlbumListenabilityEvidence(db.Conn, "listen-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if albEv.PositiveDurationCnt != 2 {
+		t.Errorf("pos duration count = %d, want 2", albEv.PositiveDurationCnt)
+	}
+	if albEv.AvgDurationSec != 95 {
+		t.Errorf("avg duration = %.1f, want 95", albEv.AvgDurationSec)
+	}
+	if albEv.Short60Ratio != 0.5 {
+		t.Errorf("short60 ratio = %.2f, want 0.5", albEv.Short60Ratio)
+	}
+
+	cov, err := GetListenabilityCoverage(db.Conn, "listenability-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cov.TotalCompletedTracks != 0 {
+		t.Errorf("no completed tracks, got %d", cov.TotalCompletedTracks)
+	}
+	if cov.CompletedTracksUnder60 != 0 {
+		t.Errorf("no completed tracks, got %d under 60", cov.CompletedTracksUnder60)
+	}
+}
+
+func TestDecodeF16AllZeros(t *testing.T) {
+	input := make([]float32, 512)
+	encoded := encodeF16(input)
+	decoded := DecodeF16(encoded)
+	for i, v := range decoded {
+		if v != 0 {
+			t.Errorf("index %d: got %f, want 0", i, v)
+		}
+	}
+}
+
+func TestDecodeF16LengthMismatch(t *testing.T) {
+	data := []byte{0x00, 0x01, 0x02}
+	decoded := DecodeF16(data)
+	if len(decoded) != 1 {
+		t.Errorf("expected 1 float from 2 bytes (truncated), got %d", len(decoded))
+	}
 }

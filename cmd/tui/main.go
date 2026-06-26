@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -935,7 +934,7 @@ func listenabilityCleanerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, sto
 				clapBlob, qualityScore, embErr := db.GetTrackEmbeddingForCleanup(sqlDB.Conn, claim.TrackID)
 				dbMu.Unlock()
 				if embErr == nil && len(clapBlob) > 0 {
-					clapVec := decodeF16ForCleanup(clapBlob)
+					clapVec := db.DecodeF16(clapBlob)
 					promptEv = computePromptEvidence(clapVec, promptCache)
 					claim.QualityScore = sql.NullFloat64{Float64: qualityScore, Valid: true}
 				}
@@ -988,34 +987,6 @@ func listenabilityCleanerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, sto
 	}
 }
 
-func decodeF16ForCleanup(b []byte) []float32 {
-	clapVec := make([]float32, len(b)/2)
-	for i := range clapVec {
-		v := uint16(b[i*2]) | uint16(b[i*2+1])<<8
-		clapVec[i] = float32FromF16(v)
-	}
-	return clapVec
-}
-
-func float32FromF16(v uint16) float32 {
-	sign := float32(1)
-	if v&0x8000 != 0 {
-		sign = -1
-	}
-	exp := int((v >> 10) & 0x1F)
-	mant := int(v & 0x3FF)
-	if exp == 0 {
-		return sign * float32(mant) / float32(1<<24)
-	}
-	if exp == 31 {
-		if mant != 0 {
-			return float32(math.NaN())
-		}
-		return sign * float32(1e10)
-	}
-	return sign * (1.0 + float32(mant)/1024.0) * float32(int(1)<<(exp-15))
-}
-
 func computePromptEvidence(clapVec []float32, promptCache map[string][]float32) listenability.PromptEvidence {
 	var ev listenability.PromptEvidence
 
@@ -1023,7 +994,7 @@ func computePromptEvidence(clapVec []float32, promptCache map[string][]float32) 
 	var positiveCount int
 	for _, p := range listenability.PositivePrompts {
 		if pv, ok := promptCache[p]; ok {
-			positiveSum += dotProductFloat32(clapVec, pv)
+			positiveSum += db.DotProduct(clapVec, pv)
 			positiveCount++
 		}
 	}
@@ -1036,7 +1007,7 @@ func computePromptEvidence(clapVec []float32, promptCache map[string][]float32) 
 	var maxNegName string
 	for _, p := range listenability.NegativePrompts {
 		if pv, ok := promptCache[p]; ok {
-			dp := dotProductFloat32(clapVec, pv)
+			dp := db.DotProduct(clapVec, pv)
 			negativeSum += dp
 			if dp > maxNeg {
 				maxNeg = dp
@@ -1051,18 +1022,6 @@ func computePromptEvidence(clapVec []float32, promptCache map[string][]float32) 
 	ev.StrongestNegativeName = maxNegName
 
 	return ev
-}
-
-func dotProductFloat32(a, b []float32) float64 {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
-	}
-	var sum float64
-	for i := 0; i < n; i++ {
-		sum += float64(a[i]) * float64(b[i])
-	}
-	return sum
 }
 
 func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent,

@@ -49,7 +49,7 @@ func QuerySimilar(db *sql.DB, trackID int, limit int) ([]SimilarTrack, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query embedding: %w", err)
 	}
-	queryVec := hybrid.FuseFeatures(decodeF16(qClap), decodeF16(qMfcc), decodeF16(qChroma))
+	queryVec := hybrid.FuseFeatures(DecodeF16(qClap), DecodeF16(qMfcc), DecodeF16(qChroma))
 
 	rows, err := db.Query(`SELECT e.track_id, COALESCE(t.title, t.filename), t.album_id, e.clap, e.mfcc, e.chroma, e.quality_score
 		FROM track_embeddings e
@@ -72,7 +72,7 @@ func QuerySimilar(db *sql.DB, trackID int, limit int) ([]SimilarTrack, error) {
 		if err := rows.Scan(&c.trackID, &c.title, &c.albumID, &cBlob, &mBlob, &chBlob, &c.quality); err != nil {
 			return nil, err
 		}
-		vec := hybrid.FuseFeatures(decodeF16(cBlob), decodeF16(mBlob), decodeF16(chBlob))
+		vec := hybrid.FuseFeatures(DecodeF16(cBlob), DecodeF16(mBlob), DecodeF16(chBlob))
 		c.dist = cosineDistance(queryVec, vec)
 		candidates = append(candidates, c)
 	}
@@ -173,7 +173,7 @@ func GetEmbedding(db *sql.DB, trackID int) (clap, mfcc, chroma []float32, qualit
 	if err != nil {
 		return nil, nil, nil, 0, err
 	}
-	return decodeF16(clapBlob), decodeF16(mfccBlob), decodeF16(chromaBlob), quality, nil
+	return DecodeF16(clapBlob), DecodeF16(mfccBlob), DecodeF16(chromaBlob), quality, nil
 }
 
 type TextSearchResult struct {
@@ -214,8 +214,8 @@ func SearchByText(db *sql.DB, queryVec []float32, queryText string, limit int) (
 		if err := rows.Scan(&r.TrackID, &r.Title, &r.AlbumID, &r.AlbumTitle, &r.AlbumCreator, &r.TrackTags, &clapBlob, &r.QualityScore); err != nil {
 			return nil, err
 		}
-		clapVec := decodeF16(clapBlob)
-		r.CLAPSimilarity = dotProduct(qv, clapVec)
+		clapVec := DecodeF16(clapBlob)
+		r.CLAPSimilarity = DotProduct(qv, clapVec)
 		r.PillScore = ComputePillScore(queryText, r.Title, r.TrackTags, r.AlbumTitle, r.AlbumCreator)
 		r.Similarity = 0.50*r.CLAPSimilarity + 0.50*r.PillScore
 		results = append(results, r)
@@ -234,7 +234,7 @@ func SearchByText(db *sql.DB, queryVec []float32, queryText string, limit int) (
 	return results, nil
 }
 
-func dotProduct(a, b []float32) float64 {
+func DotProduct(a, b []float32) float64 {
 	var sum float64
 	n := len(a)
 	if len(b) < n {
@@ -287,7 +287,7 @@ func encodeF16(v []float32) []byte {
 	return buf
 }
 
-func decodeF16(b []byte) []float32 {
+func DecodeF16(b []byte) []float32 {
 	v := make([]float32, len(b)/2)
 	for i := range v {
 		bits := binary.LittleEndian.Uint16(b[i*2:])
