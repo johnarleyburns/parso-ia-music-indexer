@@ -328,7 +328,9 @@ func (m DashboardModel) View() tea.View {
 	trackContent += drawRow("Completed:  ", fmt.Sprintf("%d", stats.Tracks.Completed), completeStyle) + "\n"
 	trackContent += drawRow("Failed:     ", fmt.Sprintf("%d", stats.Tracks.Failed), failedStyle) + "\n"
 	trackContent += drawRow("Unavail:    ", fmt.Sprintf("%d", stats.Tracks.Unavailable), unavailableStyle) + "\n"
-	trackContent += drawRow("No Tags:    ", fmt.Sprintf("%d", stats.Tracks.UntaggedCount), pendingStyle)
+	trackContent += drawRow("No Tags:    ", fmt.Sprintf("%d", stats.Tracks.UntaggedCount), pendingStyle) + "\n"
+	trackContent += drawRow("Avg Q:      ", fmt.Sprintf("%.3f", stats.Tracks.AvgQuality), valueStyle) + "\n"
+	trackContent += drawRow("Avg L:      ", fmt.Sprintf("%.3f", stats.Tracks.AvgListenability), valueStyle)
 
 	statsRow := lipgloss.JoinHorizontal(lipgloss.Top,
 		statsPanel.Render(albumContent),

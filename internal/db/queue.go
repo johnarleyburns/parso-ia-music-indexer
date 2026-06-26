@@ -16,13 +16,15 @@ type AlbumStats struct {
 }
 
 type TrackStats struct {
-	Total         int
-	Pending       int
-	Processing    int
-	Completed     int
-	Failed        int
-	Unavailable   int
-	UntaggedCount int
+	Total            int
+	Pending          int
+	Processing       int
+	Completed        int
+	Failed           int
+	Unavailable      int
+	UntaggedCount    int
+	AvgQuality       float64
+	AvgListenability float64
 }
 
 type CombinedStats struct {
@@ -215,6 +217,14 @@ func GetCombinedStats(db *sql.DB) (*CombinedStats, error) {
 		WHERE t.status = 'completed' AND (t.tags IS NULL OR t.tags = '')`).Scan(&s.Tracks.UntaggedCount)
 	if err != nil {
 		s.Tracks.UntaggedCount = 0
+	}
+
+	if s.Tracks.Completed > 0 {
+		db.QueryRow(`SELECT COALESCE(AVG(e.quality_score), 0.0) FROM tracks t
+			INNER JOIN track_embeddings e ON t.id = e.track_id
+			WHERE t.status = 'completed'`).Scan(&s.Tracks.AvgQuality)
+		db.QueryRow(`SELECT COALESCE(AVG(t.listenability_score), 0.0) FROM tracks t
+			WHERE t.status = 'completed' AND t.listenability_score IS NOT NULL`).Scan(&s.Tracks.AvgListenability)
 	}
 
 	return s, nil
