@@ -102,6 +102,9 @@ func decodeMP3FromData(data []byte) (samples []float64, sampleRate int, err erro
 		if readErr != nil {
 			return nil, 0, readErr
 		}
+		if n == 0 {
+			return nil, 0, fmt.Errorf("mp3 decoder stalled: 0 bytes read without error or EOF")
+		}
 	}
 
 	if len(samples) == 0 {

@@ -392,17 +392,23 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 			resetAlbums, errA := db.ResetStuckAlbums(sqlDB.Conn, stuckTrackAge)
 			dbMu.Unlock()
 			if errT == nil && resetTracks > 0 {
-				events <- tui.ActivityEvent{
+				select {
+				case events <- tui.ActivityEvent{
 					Type:      tui.EventInfo,
 					Timestamp: time.Now(),
 					Message:   fmt.Sprintf("Reset %d stuck tracks back to pending", resetTracks),
+				}:
+				default:
 				}
 			}
 			if errA == nil && resetAlbums > 0 {
-				events <- tui.ActivityEvent{
+				select {
+				case events <- tui.ActivityEvent{
 					Type:      tui.EventInfo,
 					Timestamp: time.Now(),
 					Message:   fmt.Sprintf("Reset %d stuck albums back to pending", resetAlbums),
+				}:
+				default:
 				}
 			}
 		}
@@ -1052,6 +1058,10 @@ func listenabilityCleanerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, sto
 				}
 				continue
 			}
+			if result.Decision == "exclude" {
+				log.Printf("[%s] EXCLUDED track %d %q: duration=%.1fs score=%.3f tier=%s reasons=%v",
+					workerID, claim.TrackID, claim.Title, claim.Duration, result.Score, result.Tier, result.Reasons)
+			}
 			if cleanerAction == "mark-unavailable" && result.Decision == "exclude" {
 				db.MarkTrackUnavailable(sqlDB.Conn, claim.TrackID, fmt.Sprintf("listenability: exclude decision (score=%.3f tier=%s)", result.Score, result.Tier))
 			}
@@ -1174,6 +1184,8 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	})
 
 	if precheckResult.Decision == "exclude" && precheckResult.Stream == "excluded" {
+		log.Printf("[%s] EXCLUDED track %d %q: duration=%.1fs score=%.3f tier=%s reasons=%v",
+			workerID, track.ID, trackName, track.Duration, precheckResult.Score, precheckResult.Tier, precheckResult.Reasons)
 		dbMu.Lock()
 		db.UpdateTrackListenability(sqlDB.Conn, track.ID, precheckResult, workerID)
 		if track.Duration > 0 && track.Duration < listenability.MinTrackSeconds {
