@@ -12,11 +12,12 @@ import (
 )
 
 type SimilarTrack struct {
-	TrackID      int
-	Title        string
-	AlbumID      string
-	QualityScore float64
-	Distance     float64
+	TrackID            int
+	Title              string
+	AlbumID            string
+	QualityScore       float64
+	Distance           float64
+	ListenabilityScore float64
 }
 
 type candidate struct {
@@ -25,6 +26,7 @@ type candidate struct {
 	albumID string
 	quality float64
 	dist    float64
+	listen  float64
 }
 
 func SaveEmbedding(db *sql.DB, trackID int, clap, mfcc, chroma []float32, qualityScore float64) error {
@@ -51,7 +53,7 @@ func QuerySimilar(db *sql.DB, trackID int, limit int) ([]SimilarTrack, error) {
 	}
 	queryVec := hybrid.FuseFeatures(DecodeF16(qClap), DecodeF16(qMfcc), DecodeF16(qChroma))
 
-	rows, err := db.Query(`SELECT e.track_id, COALESCE(t.title, t.filename), t.album_id, e.clap, e.mfcc, e.chroma, e.quality_score
+	rows, err := db.Query(`SELECT e.track_id, COALESCE(t.title, t.filename), t.album_id, e.clap, e.mfcc, e.chroma, e.quality_score, COALESCE(t.listenability_score, 0)
 		FROM track_embeddings e
 		INNER JOIN tracks t ON e.track_id = t.id
 		WHERE e.track_id != ?
@@ -69,7 +71,7 @@ func QuerySimilar(db *sql.DB, trackID int, limit int) ([]SimilarTrack, error) {
 	for rows.Next() {
 		var c candidate
 		var cBlob, mBlob, chBlob []byte
-		if err := rows.Scan(&c.trackID, &c.title, &c.albumID, &cBlob, &mBlob, &chBlob, &c.quality); err != nil {
+		if err := rows.Scan(&c.trackID, &c.title, &c.albumID, &cBlob, &mBlob, &chBlob, &c.quality, &c.listen); err != nil {
 			return nil, err
 		}
 		vec := hybrid.FuseFeatures(DecodeF16(cBlob), DecodeF16(mBlob), DecodeF16(chBlob))
@@ -89,11 +91,12 @@ func QuerySimilar(db *sql.DB, trackID int, limit int) ([]SimilarTrack, error) {
 	result := make([]SimilarTrack, limit)
 	for i := 0; i < limit; i++ {
 		result[i] = SimilarTrack{
-			TrackID:      candidates[i].trackID,
-			Title:        candidates[i].title,
-			AlbumID:      candidates[i].albumID,
-			QualityScore: candidates[i].quality,
-			Distance:     candidates[i].dist,
+			TrackID:            candidates[i].trackID,
+			Title:              candidates[i].title,
+			AlbumID:            candidates[i].albumID,
+			QualityScore:       candidates[i].quality,
+			Distance:           candidates[i].dist,
+			ListenabilityScore: candidates[i].listen,
 		}
 	}
 	return result, nil
@@ -177,16 +180,17 @@ func GetEmbedding(db *sql.DB, trackID int) (clap, mfcc, chroma []float32, qualit
 }
 
 type TextSearchResult struct {
-	TrackID        int
-	Title          string
-	AlbumID        string
-	AlbumTitle     string
-	AlbumCreator   string
-	TrackTags      string
-	QualityScore   float64
-	CLAPSimilarity float64
-	PillScore      float64
-	Similarity     float64
+	TrackID            int
+	Title              string
+	AlbumID            string
+	AlbumTitle         string
+	AlbumCreator       string
+	TrackTags          string
+	QualityScore       float64
+	CLAPSimilarity     float64
+	PillScore          float64
+	Similarity         float64
+	ListenabilityScore float64
 }
 
 func SearchByText(db *sql.DB, queryVec []float32, queryText string, limit int) ([]TextSearchResult, error) {
@@ -194,7 +198,8 @@ func SearchByText(db *sql.DB, queryVec []float32, queryText string, limit int) (
 
 	rows, err := db.Query(`SELECT e.track_id, COALESCE(t.title, t.filename), t.album_id,
 			COALESCE(a.title, a.ia_identifier), COALESCE(a.creator, ''),
-			COALESCE(t.tags, ''), e.clap, e.quality_score
+			COALESCE(t.tags, ''), e.clap, e.quality_score,
+			COALESCE(t.listenability_score, 0)
 		FROM track_embeddings e
 		INNER JOIN tracks t ON e.track_id = t.id
 		INNER JOIN albums a ON t.album_id = a.ia_identifier
@@ -211,7 +216,7 @@ func SearchByText(db *sql.DB, queryVec []float32, queryText string, limit int) (
 	for rows.Next() {
 		var r TextSearchResult
 		var clapBlob []byte
-		if err := rows.Scan(&r.TrackID, &r.Title, &r.AlbumID, &r.AlbumTitle, &r.AlbumCreator, &r.TrackTags, &clapBlob, &r.QualityScore); err != nil {
+		if err := rows.Scan(&r.TrackID, &r.Title, &r.AlbumID, &r.AlbumTitle, &r.AlbumCreator, &r.TrackTags, &clapBlob, &r.QualityScore, &r.ListenabilityScore); err != nil {
 			return nil, err
 		}
 		clapVec := DecodeF16(clapBlob)

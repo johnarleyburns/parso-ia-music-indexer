@@ -161,6 +161,10 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 			if a.AvgQuality > 0 {
 				qs = fmt.Sprintf("%.3f", a.AvgQuality)
 			}
+			ls := "---"
+			if a.AvgListenability > 0 {
+				ls = fmt.Sprintf("%.3f", a.AvgListenability)
+			}
 			rows[i] = table.Row{
 				a.Title,
 				a.Creator,
@@ -168,6 +172,7 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 				fmt.Sprintf("%d/%d", a.CompletedCount, a.TrackCount),
 				formatDownloads(a.Downloads),
 				qs,
+				ls,
 			}
 		}
 		m.table.SetRows([]table.Row{})
@@ -195,7 +200,11 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 			if t.Status == "completed" && t.QualityScore > 0 {
 				qs = fmt.Sprintf("%.3f", t.QualityScore)
 			}
-			rows[i] = table.Row{num, t.Title, qs, t.Status}
+			ls := "—"
+			if t.ListenabilityScore > 0 {
+				ls = fmt.Sprintf("%.3f", t.ListenabilityScore)
+			}
+			rows[i] = table.Row{num, t.Title, qs, ls, t.Status}
 		}
 		m.table.SetRows([]table.Row{})
 		m.table.SetColumns(albumDetailColumns())
@@ -216,7 +225,11 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 		m.similarResults = nil
 		rows := make([]table.Row, len(msg.Tracks))
 		for i, t := range msg.Tracks {
-			rows[i] = table.Row{t.Title, t.AlbumTitle, fmt.Sprintf("%.3f", t.QualityScore)}
+			ls := "---"
+			if t.ListenabilityScore > 0 {
+				ls = fmt.Sprintf("%.3f", t.ListenabilityScore)
+			}
+			rows[i] = table.Row{t.Title, t.AlbumTitle, fmt.Sprintf("%.3f", t.QualityScore), ls}
 		}
 		m.table.SetRows([]table.Row{})
 		m.table.SetColumns(trackColumns())
@@ -234,7 +247,11 @@ func (m BrowseModel) Update(msg tea.Msg) (BrowseModel, tea.Cmd) {
 		m.similarResults = msg.Tracks
 		rows := make([]table.Row, len(msg.Tracks))
 		for i, t := range msg.Tracks {
-			rows[i] = table.Row{t.Title, t.AlbumID, fmt.Sprintf("%.3f", t.QualityScore), fmt.Sprintf("%.4f", t.Distance)}
+			ls := "---"
+			if t.ListenabilityScore > 0 {
+				ls = fmt.Sprintf("%.3f", t.ListenabilityScore)
+			}
+			rows[i] = table.Row{t.Title, t.AlbumID, fmt.Sprintf("%.3f", t.QualityScore), ls, fmt.Sprintf("%.4f", t.Distance)}
 		}
 		m.table.SetRows([]table.Row{})
 		m.table.SetColumns(similarColumns())
@@ -626,6 +643,9 @@ func (m BrowseModel) View() tea.View {
 			if a.AvgQuality > 0 {
 				parts = append(parts, fmt.Sprintf("avg quality %.3f", a.AvgQuality))
 			}
+			if a.AvgListenability > 0 {
+				parts = append(parts, fmt.Sprintf("avg listen %.3f", a.AvgListenability))
+			}
 			desc := infoStyle.Bold(true).Render(a.Title) + "\n" + mutedStyle.Render(strings.Join(parts, " \u00b7 "))
 			b.WriteString(fixedHeightText(desc, m.Width-4, 3))
 			b.WriteString("\n\n")
@@ -672,6 +692,9 @@ func (m BrowseModel) renderAlbumDetailHeader(b *strings.Builder, titleStyle, mut
 	}
 	if a.AvgQuality > 0 {
 		parts = append(parts, fmt.Sprintf("avg quality %.3f", a.AvgQuality))
+	}
+	if a.AvgListenability > 0 {
+		parts = append(parts, fmt.Sprintf("avg listen %.3f", a.AvgListenability))
 	}
 	b.WriteString(mutedStyle.Render(strings.Join(parts, " \u00b7 ")))
 	b.WriteString("\n")
@@ -720,6 +743,7 @@ func albumColumns() []table.Column {
 		{Title: "Tracks", Width: 8},
 		{Title: "DLs", Width: 8},
 		{Title: "Avg Q", Width: 8},
+		{Title: "Avg L", Width: 8},
 	}
 }
 
@@ -755,8 +779,9 @@ func fixedHeightText(text string, width, maxLines int) string {
 func albumDetailColumns() []table.Column {
 	return []table.Column{
 		{Title: "#", Width: 4},
-		{Title: "Track", Width: 40},
-		{Title: "Quality", Width: 10},
+		{Title: "Track", Width: 35},
+		{Title: "Quality", Width: 8},
+		{Title: "Listen", Width: 8},
 		{Title: "Status", Width: 12},
 	}
 }
@@ -764,16 +789,18 @@ func albumDetailColumns() []table.Column {
 func trackColumns() []table.Column {
 	return []table.Column{
 		{Title: "Track", Width: 30},
-		{Title: "Album", Width: 30},
-		{Title: "Quality", Width: 10},
+		{Title: "Album", Width: 25},
+		{Title: "Quality", Width: 8},
+		{Title: "Listen", Width: 8},
 	}
 }
 
 func similarColumns() []table.Column {
 	return []table.Column{
-		{Title: "Track", Width: 28},
-		{Title: "Album", Width: 24},
-		{Title: "Quality", Width: 10},
+		{Title: "Track", Width: 24},
+		{Title: "Album", Width: 20},
+		{Title: "Quality", Width: 8},
+		{Title: "Listen", Width: 8},
 		{Title: "Distance", Width: 10},
 	}
 }

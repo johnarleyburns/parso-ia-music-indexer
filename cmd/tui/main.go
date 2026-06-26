@@ -251,7 +251,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 					WorkerID:   cID,
 					Message:    fmt.Sprintf("Cleaner %s started (pool: %d)", cID, cleanerCount),
 				}
-				safeGo(func() { listenabilityCleanerLoop(sqlDB, events, stopCh, dbMu, clapClient, cID, metrics) }, events, cID)
+				safeGo(func() { listenabilityCleanerLoop(sqlDB, events, stopCh, dbMu, clapClient, cID, metrics, cfg.ListenabilityCleanerAction) }, events, cID)
 			case tui.CmdRemoveCleaner:
 				if cleanerCount > 0 {
 					cleanerCount--
@@ -845,7 +845,8 @@ func tagEnhancerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-cha
 }
 
 func listenabilityCleanerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
-	dbMu *sync.Mutex, clapClient clap.CLAPClient, workerID string, metrics *tui.Metrics) {
+	dbMu *sync.Mutex, clapClient clap.CLAPClient, workerID string, metrics *tui.Metrics,
+	cleanerAction string) {
 
 	batchSize := 10
 	version := listenability.Version
@@ -970,6 +971,9 @@ func listenabilityCleanerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, sto
 				}
 				continue
 			}
+			if cleanerAction == "mark-unavailable" && result.Decision == "exclude" {
+				db.MarkTrackUnavailable(sqlDB.Conn, claim.TrackID, fmt.Sprintf("listenability: exclude decision (score=%.3f tier=%s)", result.Score, result.Tier))
+			}
 			dbMu.Unlock()
 
 			scoredCount++
@@ -1069,9 +1073,11 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	}
 
 	albumEvidence := listenability.AlbumEvidence{
-		AlbumID:             track.AlbumID,
-		PositiveDurationCnt: 1,
-		AvgDurationSec:      track.Duration,
+		AlbumID:  track.AlbumID,
+		Title:    track.AlbumTitle,
+		Creator:  "",
+		Subjects: track.AlbumSubjects,
+		Genres:   track.AlbumGenres,
 	}
 
 	precheckResult := listenability.ScoreTrack(listenability.TrackEvidence{
@@ -1091,8 +1097,6 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 		db.UpdateTrackListenability(sqlDB.Conn, track.ID, precheckResult, workerID)
 		if track.Duration > 0 && track.Duration < listenability.MinTrackSeconds {
 			db.MarkTrackUnavailable(sqlDB.Conn, track.ID, fmt.Sprintf("listenability: duration %.1fs below %ds minimum", track.Duration, listenability.MinTrackSeconds))
-		} else if track.Duration <= 0 {
-			db.MarkTrackUnavailable(sqlDB.Conn, track.ID, "listenability: missing duration")
 		} else {
 			db.MarkTrackUnavailable(sqlDB.Conn, track.ID, fmt.Sprintf("listenability: excluded by precheck (score=%.3f, reasons=%v)", precheckResult.Score, precheckResult.Reasons))
 		}

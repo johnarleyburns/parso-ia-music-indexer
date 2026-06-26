@@ -45,10 +45,11 @@ type playerTickMsg time.Time
 type playerDoneMsg struct{}
 
 type playerStatsMsg struct {
-	Quality    float64
-	Collection string
-	Creator    string
-	Similar    []db.SimilarTrack
+	Quality       float64
+	Listenability float64
+	Collection    string
+	Creator       string
+	Similar       []db.SimilarTrack
 }
 
 type SwitchToAlbumMsg struct {
@@ -69,11 +70,12 @@ type PlayerModel struct {
 	Width       int
 	Height      int
 
-	trackQuality    float64
-	trackCollection string
-	trackCreator    string
-	similarTracks   []db.SimilarTrack
-	similarCursor   int
+	trackQuality      float64
+	trackListenability float64
+	trackCollection   string
+	trackCreator      string
+	similarTracks     []db.SimilarTrack
+	similarCursor     int
 }
 
 func NewPlayerModel(sqlDB *sql.DB) PlayerModel {
@@ -158,6 +160,7 @@ func (m PlayerModel) Update(msg tea.Msg) (PlayerModel, tea.Cmd) {
 
 	case playerStatsMsg:
 		m.trackQuality = msg.Quality
+		m.trackListenability = msg.Listenability
 		m.trackCollection = msg.Collection
 		m.trackCreator = msg.Creator
 		m.similarTracks = msg.Similar
@@ -391,6 +394,9 @@ func (m PlayerModel) loadStatsCmd() tea.Cmd {
 		if err == nil {
 			stats.Quality = quality
 		}
+		var listenScore float64
+		sqlDB.QueryRow(`SELECT COALESCE(listenability_score, 0) FROM tracks WHERE id = ?`, trackID).Scan(&listenScore)
+		stats.Listenability = listenScore
 		if albumID != "" {
 			album, err := db.GetAlbumByID(sqlDB, albumID)
 			if err == nil {
@@ -408,6 +414,7 @@ func (m PlayerModel) loadStatsCmd() tea.Cmd {
 
 func (m *PlayerModel) clearStats() {
 	m.trackQuality = 0
+	m.trackListenability = 0
 	m.trackCollection = ""
 	m.trackCreator = ""
 	m.similarTracks = nil
@@ -513,11 +520,14 @@ func (m PlayerModel) View() tea.View {
 		b.WriteString(mutedStyle.Render(fmt.Sprintf("%d%%", int(m.volumeLevel*100))))
 		b.WriteString("\n\n")
 
-		if m.trackQuality > 0 || m.trackCollection != "" || m.trackCreator != "" {
+		if m.trackQuality > 0 || m.trackListenability > 0 || m.trackCollection != "" || m.trackCreator != "" {
 			labelStyle := lipgloss.NewStyle().Foreground(Secondary)
 			var infoParts []string
 			if m.trackQuality > 0 {
 				infoParts = append(infoParts, labelStyle.Render("Quality:")+" "+mutedStyle.Render(fmt.Sprintf("%.3f", m.trackQuality)))
+			}
+			if m.trackListenability > 0 {
+				infoParts = append(infoParts, labelStyle.Render("Listen:")+" "+mutedStyle.Render(fmt.Sprintf("%.3f", m.trackListenability)))
 			}
 			if m.trackCreator != "" {
 				infoParts = append(infoParts, labelStyle.Render("Artist:")+" "+mutedStyle.Render(m.trackCreator))
@@ -564,23 +574,25 @@ func (m PlayerModel) View() tea.View {
 			b.WriteString(mutedStyle.Render("[j/k] navigate  [enter] play"))
 			b.WriteString("\n")
 			headerStyle := lipgloss.NewStyle().Foreground(Secondary).Bold(true)
-			b.WriteString(headerStyle.Render(fmt.Sprintf("       %-30s  %-20s  %7s  %8s", "Track", "Album", "Quality", "Distance")))
+			b.WriteString(headerStyle.Render(fmt.Sprintf("       %-28s  %-18s  %6s  %6s  %7s", "Track", "Album", "Qual", "Listen", "Dist")))
 			b.WriteString("\n")
 			selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#ffffff")).Background(Primary)
 			for i, t := range m.similarTracks {
 				if i == m.similarCursor {
-					line := fmt.Sprintf(" \u25b8 %2d. %-30s  %-20s  %7.3f  %8.4f",
-						i+1, truncateStr(t.Title, 30), truncateStr(t.AlbumID, 20), t.QualityScore, t.Distance)
+					line := fmt.Sprintf(" \u25b8 %2d. %-28s  %-18s  %6.3f  %6.3f  %7.4f",
+						i+1, truncateStr(t.Title, 28), truncateStr(t.AlbumID, 18), t.QualityScore, t.ListenabilityScore, t.Distance)
 					b.WriteString(selectedStyle.Render(line))
 				} else {
 					b.WriteString(mutedStyle.Render(fmt.Sprintf("   %2d. ", i+1)))
-					b.WriteString(textStyle.Render(fmt.Sprintf("%-30s", truncateStr(t.Title, 30))))
+					b.WriteString(textStyle.Render(fmt.Sprintf("%-28s", truncateStr(t.Title, 28))))
 					b.WriteString("  ")
-					b.WriteString(mutedStyle.Render(fmt.Sprintf("%-20s", truncateStr(t.AlbumID, 20))))
+					b.WriteString(mutedStyle.Render(fmt.Sprintf("%-18s", truncateStr(t.AlbumID, 18))))
 					b.WriteString("  ")
-					b.WriteString(mutedStyle.Render(fmt.Sprintf("%7.3f", t.QualityScore)))
+					b.WriteString(mutedStyle.Render(fmt.Sprintf("%6.3f", t.QualityScore)))
 					b.WriteString("  ")
-					b.WriteString(mutedStyle.Render(fmt.Sprintf("%8.4f", t.Distance)))
+					b.WriteString(mutedStyle.Render(fmt.Sprintf("%6.3f", t.ListenabilityScore)))
+					b.WriteString("  ")
+					b.WriteString(mutedStyle.Render(fmt.Sprintf("%7.4f", t.Distance)))
 				}
 				b.WriteString("\n")
 			}

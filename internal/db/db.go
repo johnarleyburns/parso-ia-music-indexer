@@ -161,6 +161,17 @@ func (db *DB) migrate() error {
 		}
 	}
 
+	indexQueries := []string{
+		`CREATE INDEX IF NOT EXISTS idx_tracks_listenability_work ON tracks(status, listenability_version, listenability_locked_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_tracks_listenability_score ON tracks(listenability_score)`,
+		`CREATE INDEX IF NOT EXISTS idx_albums_listenability_score ON albums(listenability_score)`,
+	}
+	for _, q := range indexQueries {
+		if _, err := db.Conn.Exec(q); err != nil {
+			return fmt.Errorf("exec %q: %w", q, err)
+		}
+	}
+
 	if err := db.migrateUnavailableCheckConstraint(); err != nil {
 		return fmt.Errorf("unavailable check migration: %w", err)
 	}
@@ -244,32 +255,42 @@ func (db *DB) migrateSchemaChanges() error {
 	}
 
 	if tableExists(db.Conn, "tracks") && !columnExists(db.Conn, "tracks", "listenability_score") {
-		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_score REAL")
-		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_tier TEXT")
-		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_decision TEXT")
-		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_stream TEXT")
-		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_reasons TEXT")
-		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_components TEXT")
-		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_version TEXT")
-		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_checked_at TEXT")
-		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_worker_id TEXT")
-		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_locked_at TEXT")
+		cols := []struct{ name, typ string }{
+			{"listenability_score", "REAL"},
+			{"listenability_tier", "TEXT"},
+			{"listenability_decision", "TEXT"},
+			{"listenability_stream", "TEXT"},
+			{"listenability_reasons", "TEXT"},
+			{"listenability_components", "TEXT"},
+			{"listenability_version", "TEXT"},
+			{"listenability_checked_at", "TEXT"},
+			{"listenability_worker_id", "TEXT"},
+			{"listenability_locked_at", "TEXT"},
+		}
+		for _, c := range cols {
+			if _, err := db.Conn.Exec(fmt.Sprintf("ALTER TABLE tracks ADD COLUMN %s %s", c.name, c.typ)); err != nil {
+				return fmt.Errorf("add tracks.%s: %w", c.name, err)
+			}
+		}
 	}
 
 	if tableExists(db.Conn, "albums") && !columnExists(db.Conn, "albums", "listenability_score") {
-		db.Conn.Exec("ALTER TABLE albums ADD COLUMN listenability_score REAL")
-		db.Conn.Exec("ALTER TABLE albums ADD COLUMN listenability_tier TEXT")
-		db.Conn.Exec("ALTER TABLE albums ADD COLUMN listenability_decision TEXT")
-		db.Conn.Exec("ALTER TABLE albums ADD COLUMN listenability_stream TEXT")
-		db.Conn.Exec("ALTER TABLE albums ADD COLUMN listenability_reasons TEXT")
-		db.Conn.Exec("ALTER TABLE albums ADD COLUMN listenability_components TEXT")
-		db.Conn.Exec("ALTER TABLE albums ADD COLUMN listenability_version TEXT")
-		db.Conn.Exec("ALTER TABLE albums ADD COLUMN listenability_checked_at TEXT")
+		cols := []struct{ name, typ string }{
+			{"listenability_score", "REAL"},
+			{"listenability_tier", "TEXT"},
+			{"listenability_decision", "TEXT"},
+			{"listenability_stream", "TEXT"},
+			{"listenability_reasons", "TEXT"},
+			{"listenability_components", "TEXT"},
+			{"listenability_version", "TEXT"},
+			{"listenability_checked_at", "TEXT"},
+		}
+		for _, c := range cols {
+			if _, err := db.Conn.Exec(fmt.Sprintf("ALTER TABLE albums ADD COLUMN %s %s", c.name, c.typ)); err != nil {
+				return fmt.Errorf("add albums.%s: %w", c.name, err)
+			}
+		}
 	}
-
-	db.Conn.Exec(`CREATE INDEX IF NOT EXISTS idx_tracks_listenability_work ON tracks(status, listenability_version, listenability_locked_at)`)
-	db.Conn.Exec(`CREATE INDEX IF NOT EXISTS idx_tracks_listenability_score ON tracks(listenability_score)`)
-	db.Conn.Exec(`CREATE INDEX IF NOT EXISTS idx_albums_listenability_score ON albums(listenability_score)`)
 
 	return nil
 }

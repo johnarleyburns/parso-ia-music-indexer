@@ -62,37 +62,40 @@ type AlbumInsert struct {
 }
 
 type TrackResult struct {
-	TrackID      int
-	Title        string
-	Filename     string
-	AlbumID      string
-	AlbumTitle   string
-	DownloadURL  string
-	QualityScore float64
+	TrackID           int
+	Title             string
+	Filename          string
+	AlbumID           string
+	AlbumTitle        string
+	DownloadURL       string
+	QualityScore      float64
+	ListenabilityScore float64
 }
 
 type AlbumResult struct {
-	IAIdentifier   string
-	Title          string
-	Creator        string
-	Collection     string
-	ArtURL         string
-	TrackCount     int
-	Status         string
-	CompletedCount int
-	Downloads      int
-	AvgQuality     float64
+	IAIdentifier    string
+	Title           string
+	Creator         string
+	Collection      string
+	ArtURL          string
+	TrackCount      int
+	Status          string
+	CompletedCount  int
+	Downloads       int
+	AvgQuality      float64
+	AvgListenability float64
 }
 
 type TrackDetail struct {
-	ID           int
-	Filename     string
-	Title        string
-	TrackNumber  int
-	Format       string
-	DownloadURL  string
-	Status       string
-	QualityScore float64
+	ID                int
+	Filename          string
+	Title             string
+	TrackNumber       int
+	Format            string
+	DownloadURL       string
+	Status            string
+	QualityScore      float64
+	ListenabilityScore float64
 }
 
 type UntaggedAlbum struct {
@@ -744,7 +747,8 @@ func SearchCompletedTracks(sqlDB *sql.DB, query string, limit, offset int) ([]Tr
 			return nil, 0, fmt.Errorf("count: %w", err)
 		}
 		rows, err = sqlDB.Query(`SELECT t.id, COALESCE(t.title, t.filename), t.filename, t.album_id,
-				COALESCE(a.title, a.ia_identifier), t.download_url, COALESCE(e.quality_score, 0.0)
+				COALESCE(a.title, a.ia_identifier), t.download_url, COALESCE(e.quality_score, 0.0),
+				COALESCE(t.listenability_score, 0.0)
 			FROM tracks t
 			INNER JOIN track_embeddings e ON t.id = e.track_id
 			INNER JOIN albums a ON t.album_id = a.ia_identifier
@@ -769,7 +773,8 @@ func SearchCompletedTracks(sqlDB *sql.DB, query string, limit, offset int) ([]Tr
 			return nil, 0, fmt.Errorf("count: %w", err)
 		}
 		rows, err = sqlDB.Query(`SELECT t.id, COALESCE(t.title, t.filename), t.filename, t.album_id,
-				COALESCE(a.title, a.ia_identifier), t.download_url, COALESCE(e.quality_score, 0.0)
+				COALESCE(a.title, a.ia_identifier), t.download_url, COALESCE(e.quality_score, 0.0),
+				COALESCE(t.listenability_score, 0.0)
 			FROM tracks t
 			INNER JOIN track_embeddings e ON t.id = e.track_id
 			INNER JOIN albums a ON t.album_id = a.ia_identifier
@@ -789,7 +794,7 @@ func SearchCompletedTracks(sqlDB *sql.DB, query string, limit, offset int) ([]Tr
 	var results []TrackResult
 	for rows.Next() {
 		var r TrackResult
-		if err := rows.Scan(&r.TrackID, &r.Title, &r.Filename, &r.AlbumID, &r.AlbumTitle, &r.DownloadURL, &r.QualityScore); err != nil {
+		if err := rows.Scan(&r.TrackID, &r.Title, &r.Filename, &r.AlbumID, &r.AlbumTitle, &r.DownloadURL, &r.QualityScore, &r.ListenabilityScore); err != nil {
 			return nil, 0, err
 		}
 		results = append(results, r)
@@ -820,7 +825,8 @@ func SearchAlbums(sqlDB *sql.DB, query string, limit, offset int, completedOnly 
 				COALESCE(a.collection, ''), COALESCE(a.art_url, ''), a.track_count,
 				a.status, COALESCE((SELECT count(*) FROM tracks t WHERE t.album_id = a.ia_identifier AND t.status = 'completed'), 0),
 				COALESCE(a.downloads, 0),
-				COALESCE((SELECT AVG(e.quality_score) FROM tracks t INNER JOIN track_embeddings e ON t.id = e.track_id WHERE t.album_id = a.ia_identifier AND t.status = 'completed'), 0.0)
+				COALESCE((SELECT AVG(e.quality_score) FROM tracks t INNER JOIN track_embeddings e ON t.id = e.track_id WHERE t.album_id = a.ia_identifier AND t.status = 'completed'), 0.0),
+				COALESCE((SELECT AVG(t.listenability_score) FROM tracks t WHERE t.album_id = a.ia_identifier AND t.status = 'completed' AND t.listenability_score IS NOT NULL), 0.0)
 			FROM albums a
 			WHERE a.status = 'resolved'`+completedFilter+`
 			ORDER BY a.downloads DESC, a.updated_at DESC
@@ -838,7 +844,8 @@ func SearchAlbums(sqlDB *sql.DB, query string, limit, offset int, completedOnly 
 				COALESCE(a.collection, ''), COALESCE(a.art_url, ''), a.track_count,
 				a.status, COALESCE((SELECT count(*) FROM tracks t WHERE t.album_id = a.ia_identifier AND t.status = 'completed'), 0),
 				COALESCE(a.downloads, 0),
-				COALESCE((SELECT AVG(e.quality_score) FROM tracks t INNER JOIN track_embeddings e ON t.id = e.track_id WHERE t.album_id = a.ia_identifier AND t.status = 'completed'), 0.0)
+				COALESCE((SELECT AVG(e.quality_score) FROM tracks t INNER JOIN track_embeddings e ON t.id = e.track_id WHERE t.album_id = a.ia_identifier AND t.status = 'completed'), 0.0),
+				COALESCE((SELECT AVG(t.listenability_score) FROM tracks t WHERE t.album_id = a.ia_identifier AND t.status = 'completed' AND t.listenability_score IS NOT NULL), 0.0)
 			FROM albums a
 			WHERE a.status = 'resolved'
 			  AND (a.ia_identifier LIKE ? OR a.title LIKE ? OR a.creator LIKE ? OR a.collection LIKE ?)`+completedFilter+`
@@ -853,7 +860,7 @@ func SearchAlbums(sqlDB *sql.DB, query string, limit, offset int, completedOnly 
 	var results []AlbumResult
 	for rows.Next() {
 		var r AlbumResult
-		if err := rows.Scan(&r.IAIdentifier, &r.Title, &r.Creator, &r.Collection, &r.ArtURL, &r.TrackCount, &r.Status, &r.CompletedCount, &r.Downloads, &r.AvgQuality); err != nil {
+		if err := rows.Scan(&r.IAIdentifier, &r.Title, &r.Creator, &r.Collection, &r.ArtURL, &r.TrackCount, &r.Status, &r.CompletedCount, &r.Downloads, &r.AvgQuality, &r.AvgListenability); err != nil {
 			return nil, 0, err
 		}
 		results = append(results, r)
@@ -868,7 +875,8 @@ func SearchAlbums(sqlDB *sql.DB, query string, limit, offset int, completedOnly 
 func GetAlbumTracks(sqlDB *sql.DB, albumID string) ([]TrackDetail, error) {
 	rows, err := sqlDB.Query(`SELECT t.id, t.filename, COALESCE(t.title, t.filename), COALESCE(t.track_number, 0),
 			COALESCE(t.format, ''), t.download_url, t.status,
-			COALESCE(e.quality_score, 0.0)
+			COALESCE(e.quality_score, 0.0),
+			COALESCE(t.listenability_score, 0.0)
 		FROM tracks t
 		LEFT JOIN track_embeddings e ON t.id = e.track_id
 		WHERE t.album_id = ?
@@ -881,7 +889,7 @@ func GetAlbumTracks(sqlDB *sql.DB, albumID string) ([]TrackDetail, error) {
 	var results []TrackDetail
 	for rows.Next() {
 		var r TrackDetail
-		if err := rows.Scan(&r.ID, &r.Filename, &r.Title, &r.TrackNumber, &r.Format, &r.DownloadURL, &r.Status, &r.QualityScore); err != nil {
+		if err := rows.Scan(&r.ID, &r.Filename, &r.Title, &r.TrackNumber, &r.Format, &r.DownloadURL, &r.Status, &r.QualityScore, &r.ListenabilityScore); err != nil {
 			return nil, err
 		}
 		results = append(results, r)
@@ -899,9 +907,10 @@ func GetAlbumByID(sqlDB *sql.DB, albumID string) (*AlbumResult, error) {
 			COALESCE(a.collection, ''), COALESCE(a.art_url, ''), a.track_count, a.status,
 			COALESCE((SELECT count(*) FROM tracks t WHERE t.album_id = a.ia_identifier AND t.status = 'completed'), 0),
 			COALESCE(a.downloads, 0),
-			COALESCE((SELECT AVG(e.quality_score) FROM tracks t INNER JOIN track_embeddings e ON t.id = e.track_id WHERE t.album_id = a.ia_identifier AND t.status = 'completed'), 0.0)
+			COALESCE((SELECT AVG(e.quality_score) FROM tracks t INNER JOIN track_embeddings e ON t.id = e.track_id WHERE t.album_id = a.ia_identifier AND t.status = 'completed'), 0.0),
+			COALESCE((SELECT AVG(t.listenability_score) FROM tracks t WHERE t.album_id = a.ia_identifier AND t.status = 'completed' AND t.listenability_score IS NOT NULL), 0.0)
 		FROM albums a WHERE a.ia_identifier = ?`, albumID).
-		Scan(&r.IAIdentifier, &r.Title, &r.Creator, &r.Collection, &r.ArtURL, &r.TrackCount, &r.Status, &r.CompletedCount, &r.Downloads, &r.AvgQuality)
+		Scan(&r.IAIdentifier, &r.Title, &r.Creator, &r.Collection, &r.ArtURL, &r.TrackCount, &r.Status, &r.CompletedCount, &r.Downloads, &r.AvgQuality, &r.AvgListenability)
 	if err != nil {
 		return nil, err
 	}
