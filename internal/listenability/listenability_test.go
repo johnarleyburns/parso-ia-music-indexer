@@ -21,11 +21,12 @@ func TestDurationScore(t *testing.T) {
 		{"90s", 90, 0.99, 1.01},
 		{"180s", 180, 0.99, 1.01},
 		{"900s", 900, 0.99, 1.01},
-		{"1000s", 1000, 0.69, 0.76},
-		{"1200s", 1200, 0.59, 0.66},
-		{"1500s", 1500, 0.44, 0.46},
-		{"1600s", 1600, -0.01, 0.01},
-		{"2000s", 2000, -0.01, 0.01},
+		{"1200s", 1200, 0.99, 1.01},
+		{"1800s", 1800, 0.99, 1.01},
+		{"2000s", 2000, 0.57, 0.59},
+		{"2250s", 2250, 0.36, 0.39},
+		{"2700s", 2700, -0.01, 0.01},
+		{"3000s", 3000, -0.01, 0.01},
 	}
 
 	for _, tt := range tests {
@@ -245,9 +246,9 @@ func TestStreamClassificationEdges(t *testing.T) {
 	}{
 		{"zero_dur", 0, 0.9, AlbumEvidence{}, "excluded"},
 		{"under_60", 30, 0.9, AlbumEvidence{}, "excluded"},
-		{"above_1500", 1600, 0.9, AlbumEvidence{}, "excluded"},
-		{"longform_good", 1000, 0.6, AlbumEvidence{}, "longform_candidate"},
-		{"longform_poor", 1000, 0.2, AlbumEvidence{}, "excluded"},
+		{"above_2700", 3000, 0.9, AlbumEvidence{}, "excluded"},
+		{"longform_good", 2000, 0.6, AlbumEvidence{}, "longform_candidate"},
+		{"longform_poor", 2000, 0.2, AlbumEvidence{}, "excluded"},
 		{"default_include", 200, 0.9, AlbumEvidence{}, "default"},
 		{"default_demote", 200, 0.4, AlbumEvidence{}, "default"},
 		{"default_exclude", 200, 0.1, AlbumEvidence{}, "excluded"},
@@ -287,10 +288,26 @@ func TestAlbumStreamClassification(t *testing.T) {
 		PositiveDurationCnt: 25,
 		AvgDurationSec:      0.03,
 		Short60Ratio:        1.0,
+		HasChannelDump:      true,
 	}
 	r = ScoreAlbum(shortAlbum)
+	if r.Stream != "longform_candidate" {
+		t.Errorf("channel dump album stream = %q, want 'longform_candidate'", r.Stream)
+	}
+	if r.Decision != "demote" {
+		t.Errorf("channel dump album decision = %q, want 'demote'", r.Decision)
+	}
+
+	badShortAlbum := AlbumEvidence{
+		Title:               "Broken Files",
+		TrackCount:          10,
+		PositiveDurationCnt: 10,
+		AvgDurationSec:      3,
+		Short60Ratio:        0.95,
+	}
+	r = ScoreAlbum(badShortAlbum)
 	if r.Stream != "excluded" {
-		t.Errorf("channel dump album stream = %q, want 'excluded'", r.Stream)
+		t.Errorf("non-channel-dump short album stream = %q, want 'excluded'", r.Stream)
 	}
 }
 
@@ -300,6 +317,8 @@ func TestNoFalsePositiveOnMusicMetadata(t *testing.T) {
 		{Title: "Symphony No 5", Creator: "Beethoven Orchestra", Subjects: "Classical; Orchestra", Genres: "Classical"},
 		{Title: "Electric Guitar Solos", Creator: "Various Artists", Subjects: "Guitar; Instrumental", Genres: "Rock"},
 		{Title: "Jazz Standards Collection", Creator: "Miles Davis", Subjects: "Jazz; Trumpet", Genres: "Jazz"},
+		{Title: "Music of Indonesia", Creator: "Various", Subjects: "Folk, World, & Country, Gamelan, Field Recording", Genres: "Folk, World, & Country"},
+		{Title: "African Music", Creator: "", Subjects: "folk music, traditional music, field recordings, India", Genres: ""},
 	}
 
 	for _, a := range albums {
@@ -383,7 +402,7 @@ func TestScoreTrackHardExclude60s(t *testing.T) {
 
 func TestScoreTrackLongform(t *testing.T) {
 	ev := TrackEvidence{
-		DurationSec: 1000,
+		DurationSec: 2000,
 		Album: AlbumEvidence{
 			PositiveDurationCnt: 10,
 			AvgDurationSec:      200,
@@ -393,7 +412,7 @@ func TestScoreTrackLongform(t *testing.T) {
 	}
 	r := ScoreTrack(ev)
 	if r.Stream != "longform_candidate" {
-		t.Errorf("1000s track stream = %q, want 'longform_candidate'", r.Stream)
+		t.Errorf("2000s track stream = %q, want 'longform_candidate'", r.Stream)
 	}
 }
 
@@ -533,5 +552,59 @@ func TestIsStoryMetadata(t *testing.T) {
 				t.Errorf("IsStoryMetadata(%q) = %v, want %v", tt.title, got, tt.isStory)
 			}
 		})
+	}
+}
+
+func TestIsSemiNonMusicMetadata(t *testing.T) {
+	tests := []struct {
+		name     string
+		title    string
+		subjects string
+		genres   string
+		want     bool
+	}{
+		{"field_recording_music", "Music of Indonesia", "Folk, Field Recording", "Gamelan", true},
+		{"field_recordings_plural", "Tribology", "field recordings, traditional music", "", true},
+		{"applause", "Live at the Apollo", "Rock, applause", "Rock", true},
+		{"crowd_noise", "Concert Recording", "crowd noise, live", "", true},
+		{"env_sound", "Nature Sounds", "environmental sound", "Ambient", true},
+		{"music_album", "Greatest Hits", "Rock, Music", "Rock", false},
+		{"audiobook_only", "The Great Novel", "Audiobook, Fiction", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsSemiNonMusicMetadata(tt.title, "", tt.subjects, tt.genres)
+			if got != tt.want {
+				t.Errorf("IsSemiNonMusicMetadata(%q, %q, %q) = %v, want %v",
+					tt.title, tt.subjects, tt.genres, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestScoreTrackSemiNonMusic(t *testing.T) {
+	ev := TrackEvidence{
+		DurationSec: 200,
+		Album: AlbumEvidence{
+			PositiveDurationCnt: 10,
+			AvgDurationSec:      200,
+			Short60Ratio:        0.1,
+			Title:               "Music of Indonesia",
+			Creator:             "",
+			Subjects:            "Folk, Field Recording",
+		},
+		QualityScore: 0.9,
+		Title:        "Gamelan Performance",
+		Filename:     "gamelan.mp3",
+		Tags:         "world, gamelan",
+		BitrateKbps:  192,
+	}
+	r := ScoreTrack(ev)
+	if r.Decision != "include" {
+		t.Errorf("field recording music decision = %q, want 'include' (reasons=%v, score=%.4f, tier=%s)",
+			r.Decision, r.Reasons, r.Score, r.Tier)
+	}
+	if r.Stream != "default" {
+		t.Errorf("field recording music stream = %q, want 'default'", r.Stream)
 	}
 }

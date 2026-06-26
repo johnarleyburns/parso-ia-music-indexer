@@ -14,6 +14,7 @@ const (
 	CmdAddCleaner           ControlAction = "add_cleaner"
 	CmdRemoveCleaner        ControlAction = "remove_cleaner"
 	CmdResetFailed          ControlAction = "reset_failed"
+	CmdRestartWorker        ControlAction = "restart_worker"
 	CmdShutdown             ControlAction = "shutdown"
 )
 

@@ -248,6 +248,9 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "F":
 				m.Controls <- ControlCmd{Action: CmdResetFailed}
 				return m, nil
+			case "!":
+				m.Controls <- ControlCmd{Action: CmdRestartWorker}
+				return m, nil
 			}
 		}
 

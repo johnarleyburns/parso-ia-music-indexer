@@ -137,6 +137,22 @@ func GetAlbumListenabilityEvidence(db *sql.DB, albumID string) (listenability.Al
 	e.Short60Ratio = float64(under60) / float64(len(durations))
 	e.Short90Ratio = float64(under90) / float64(len(durations))
 
+	var chDump int
+	db.QueryRow(
+		`SELECT COUNT(*) FROM tracks WHERE album_id=? AND (
+			LOWER(title || ' ' || filename) LIKE '%ch 1%' OR
+			LOWER(title || ' ' || filename) LIKE '%ch 2%' OR
+			LOWER(title || ' ' || filename) LIKE '%ch 3%' OR
+			LOWER(title || ' ' || filename) LIKE '%ch 4%' OR
+			LOWER(title || ' ' || filename) LIKE '%channel 1%' OR
+			LOWER(title || ' ' || filename) LIKE '%channel 2%' OR
+			LOWER(title || ' ' || filename) LIKE '%track 1%' OR
+			LOWER(title || ' ' || filename) LIKE '%track 2%'
+		) LIMIT 1`,
+		albumID,
+	).Scan(&chDump)
+	e.HasChannelDump = chDump > 0
+
 	return e, nil
 }
 
@@ -338,4 +354,45 @@ func GetTrackClaimWithListenability(db *sql.DB, trackID int) (TrackDetail, liste
 		json.Unmarshal([]byte(componentsJSON.String), &r.Components)
 	}
 	return t, r, nil
+}
+
+func MigrateListenabilityV1ToV2(db *sql.DB) (completedReset int64, unavailableReset int64, err error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(
+		`UPDATE tracks SET listenability_version = NULL, updated_at = datetime('now')
+		 WHERE status = 'completed' AND listenability_version = 'listenability-v1'`)
+	if err != nil {
+		return 0, 0, fmt.Errorf("reset completed v1 tracks: %w", err)
+	}
+	completedReset, _ = res.RowsAffected()
+
+	res, err = tx.Exec(
+		`UPDATE tracks SET
+			status = 'completed',
+			listenability_version = NULL,
+			listenability_decision = NULL,
+			listenability_stream = NULL,
+			listenability_tier = NULL,
+			listenability_reasons = NULL,
+			listenability_components = NULL,
+			listenability_checked_at = NULL,
+			listenability_worker_id = NULL,
+			error_message = NULL,
+			updated_at = datetime('now')
+		 WHERE status = 'unavailable'
+		   AND error_message LIKE 'listenability:%'`)
+	if err != nil {
+		return completedReset, 0, fmt.Errorf("reset unavailable listenability tracks: %w", err)
+	}
+	unavailableReset, _ = res.RowsAffected()
+
+	if err := tx.Commit(); err != nil {
+		return completedReset, unavailableReset, fmt.Errorf("commit: %w", err)
+	}
+	return completedReset, unavailableReset, nil
 }

@@ -35,6 +35,11 @@ const (
 	stuckTrackAge   = 10 * time.Minute
 )
 
+var (
+	lastPanicked   string
+	lastPanickedMu sync.Mutex
+)
+
 func setupFileLogging(cfg *config.Config) *os.File {
 	logDir := filepath.Dir(cfg.DBPath)
 	os.MkdirAll(logDir, 0755)
@@ -70,6 +75,9 @@ func safeGo(fn func(), events chan<- tui.ActivityEvent, label string) {
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("PANIC in goroutine %q: %v\n%s", label, r, debug.Stack())
+				lastPanickedMu.Lock()
+				lastPanicked = label
+				lastPanickedMu.Unlock()
 				events <- tui.ActivityEvent{
 					Type:      tui.EventInfo,
 					Timestamp: time.Now(),
@@ -301,6 +309,79 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 						Type:      tui.EventInfo,
 						Timestamp: time.Now(),
 						Message:   fmt.Sprintf("Reset %d failed albums and %d failed tracks to pending", albumCount, trackCount),
+					}
+				}
+
+			case tui.CmdRestartWorker:
+				workerType := cmd.WorkerID
+				if workerType == "" {
+					lastPanickedMu.Lock()
+					workerType = lastPanicked
+					lastPanicked = ""
+					lastPanickedMu.Unlock()
+				}
+				switch {
+				case strings.HasPrefix(workerType, "analyzer"):
+					workerCount++
+					wID := fmt.Sprintf("analyzer-%d", nextWorkerID)
+					nextWorkerID++
+					stopCh := make(chan struct{})
+					workerStopChs[nextWorkerID-1] = stopCh
+					events <- tui.ActivityEvent{
+						Type:       tui.EventWorkerStarted,
+						Timestamp:  time.Now(),
+						Identifier: wID,
+						WorkerID:   wID,
+						Message:    fmt.Sprintf("Analyzer %s started (pool: %d)", wID, workerCount),
+					}
+					safeGo(func() { workerLoop(cfg, sqlDB, events, stopCh, dbMu, clapClient, iaClient, wID, metrics, iaLimiter, bwLimiter) }, events, wID)
+				case strings.HasPrefix(cmd.WorkerID, "cleaner"):
+					cleanerCount++
+					cID := fmt.Sprintf("cleaner-%d", nextCleanerID)
+					nextCleanerID++
+					stopCh := make(chan struct{})
+					cleanerStopChs[nextCleanerID-1] = stopCh
+					events <- tui.ActivityEvent{
+						Type:       tui.EventWorkerStarted,
+						Timestamp:  time.Now(),
+						Identifier: cID,
+						WorkerID:   cID,
+						Message:    fmt.Sprintf("Cleaner %s started (pool: %d)", cID, cleanerCount),
+					}
+					safeGo(func() { listenabilityCleanerLoop(sqlDB, events, stopCh, dbMu, clapClient, cID, metrics, cfg.ListenabilityCleanerAction) }, events, cID)
+				case strings.HasPrefix(cmd.WorkerID, "resolver"):
+					resolverCount++
+					rID := fmt.Sprintf("resolver-%d", nextResolverID)
+					nextResolverID++
+					stopCh := make(chan struct{})
+					resolverStopChs[nextResolverID-1] = stopCh
+					events <- tui.ActivityEvent{
+						Type:       tui.EventWorkerStarted,
+						Timestamp:  time.Now(),
+						Identifier: rID,
+						WorkerID:   rID,
+						Message:    fmt.Sprintf("Resolver %s started (pool: %d)", rID, resolverCount),
+					}
+					safeGo(func() { albumResolverLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, rID, metrics) }, events, rID)
+				case strings.HasPrefix(cmd.WorkerID, "enhancer"):
+					enhancerCount++
+					eID := fmt.Sprintf("enhancer-%d", nextEnhancerID)
+					nextEnhancerID++
+					stopCh := make(chan struct{})
+					enhancerStopChs[nextEnhancerID-1] = stopCh
+					events <- tui.ActivityEvent{
+						Type:       tui.EventWorkerStarted,
+						Timestamp:  time.Now(),
+						Identifier: eID,
+						WorkerID:   eID,
+						Message:    fmt.Sprintf("Enhancer %s started (pool: %d)", eID, enhancerCount),
+					}
+					safeGo(func() { tagEnhancerLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, eID, metrics) }, events, eID)
+				default:
+					events <- tui.ActivityEvent{
+						Type:      tui.EventInfo,
+						Timestamp: time.Now(),
+						Message:   fmt.Sprintf("Unknown worker type for restart: %q (use analyzer, cleaner, resolver, enhancer; or wait for a panic event)", workerType),
 					}
 				}
 			}
@@ -1570,6 +1651,13 @@ func runTUI(cfg *config.Config) {
 		fmt.Fprintf(os.Stderr, "Seeded %d collections\n", seeded)
 	}
 
+	compReset, unavReset, err := db.MigrateListenabilityV1ToV2(sqlDB.Conn)
+	if err != nil {
+		log.Printf("[migration] v1→v2 migration error: %v", err)
+	} else if compReset > 0 || unavReset > 0 {
+		log.Printf("[migration] v1→v2: reset %d completed + %d unavailable tracks for re-scoring", compReset, unavReset)
+	}
+
 	logDir := filepath.Dir(cfg.DBPath)
 	sidecarProc, clapClient, err := clap.EnsureSidecar(cfg.ClapHost, cfg.ClapPort, cfg.ClapSidecarDir, logDir, func(msg string) {
 		log.Printf("[sidecar] %s", msg)
@@ -1658,6 +1746,13 @@ func runHeadless(cfg *config.Config) {
 	}
 	if seeded > 0 {
 		fmt.Fprintf(os.Stderr, "Seeded %d collections\n", seeded)
+	}
+
+	compReset, unavReset, err := db.MigrateListenabilityV1ToV2(sqlDB.Conn)
+	if err != nil {
+		log.Printf("[migration] v1→v2 migration error: %v", err)
+	} else if compReset > 0 || unavReset > 0 {
+		log.Printf("[migration] v1→v2: reset %d completed + %d unavailable tracks for re-scoring", compReset, unavReset)
 	}
 
 	logDir := filepath.Dir(cfg.DBPath)

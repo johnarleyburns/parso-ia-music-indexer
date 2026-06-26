@@ -5,13 +5,13 @@ import (
 	"strings"
 )
 
-const Version = "listenability-v1"
+const Version = "listenability-v2"
 
 const (
 	MinTrackSeconds       = 60
 	TargetTrackSeconds    = 90
-	PreferredMaxSeconds   = 900
-	LongformMaxSeconds    = 1500
+	PreferredMaxSeconds   = 1800
+	LongformMaxSeconds    = 2700
 	IncludeThreshold      = 0.50
 	HardExcludeThreshold  = 0.25
 )
@@ -51,6 +51,7 @@ type AlbumEvidence struct {
 	Short30Ratio        float64
 	Short60Ratio        float64
 	Short90Ratio        float64
+	HasChannelDump      bool
 }
 
 type PromptEvidence struct {
@@ -155,7 +156,11 @@ func ScoreAlbum(e AlbumEvidence) Result {
 	if e.TrackCount >= 5 && e.AvgDurationSec < 15 && e.Short60Ratio >= 0.80 {
 		r.Reasons = append(r.Reasons, "album_avg_duration_below_15s")
 		r.Reasons = append(r.Reasons, "album_short60_ratio_above_80pct")
-		r.Score = 0.0
+		if e.HasChannelDump {
+			r.Score = math.Max(r.Score, 0.25)
+		} else {
+			r.Score = 0.0
+		}
 	}
 	if e.AvgDurationSec < 30 {
 		r.Reasons = append(r.Reasons, "album_avg_duration_below_30s")
@@ -194,7 +199,7 @@ func DurationScore(seconds float64) (score float64, confidence float64) {
 	}
 	if seconds <= LongformMaxSeconds {
 		t := (seconds - PreferredMaxSeconds) / (LongformMaxSeconds - PreferredMaxSeconds)
-		return 0.75 - t*0.30, 0.5
+		return 0.75 - t*0.75, 0.5
 	}
 	return 0.0, 0.0
 }
@@ -245,6 +250,9 @@ func metaContentScore(album AlbumEvidence, title, filename string) float64 {
 	if IsNonMusicMetadata(album.Title, album.Creator, album.Subjects, album.Genres) {
 		score -= 0.3
 	}
+	if IsSemiNonMusicMetadata(album.Title, album.Creator, album.Subjects, album.Genres) {
+		score -= 0.15
+	}
 	patterns := titlePatternReasons(title, filename)
 	if len(patterns) > 0 {
 		score -= 0.2 * float64(len(patterns))
@@ -286,7 +294,7 @@ func collectTrackReasons(e TrackEvidence, r Result) []string {
 	} else if dur < TargetTrackSeconds {
 		reasons = append(reasons, "duration_below_90s")
 	} else if dur > LongformMaxSeconds {
-		reasons = append(reasons, "duration_above_25m")
+		reasons = append(reasons, "duration_above_45m")
 	} else if dur > PreferredMaxSeconds {
 		reasons = append(reasons, "longform_candidate")
 	}
@@ -316,6 +324,10 @@ func collectTrackReasons(e TrackEvidence, r Result) []string {
 
 	if IsNonMusicMetadata(e.Album.Title, e.Album.Creator, e.Album.Subjects, e.Album.Genres) {
 		reasons = append(reasons, "non_music_metadata")
+	}
+
+	if IsSemiNonMusicMetadata(e.Album.Title, e.Album.Creator, e.Album.Subjects, e.Album.Genres) {
+		reasons = append(reasons, "semi_non_music_metadata")
 	}
 
 	return reasons
@@ -356,10 +368,22 @@ func IsNonMusicMetadata(title, creator, subjects, genres string) bool {
 		"audiobook", "spoken word", "language instruction",
 		"sound effects", "sound effect", "sfx",
 		"test tones", "test tone", "silence", "noise",
-		"applause", "crowd noise", "ambient noise",
-		"field recording", "environmental sound",
 	}
 	for _, term := range nonMusicTerms {
+		if strings.Contains(combined, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func IsSemiNonMusicMetadata(title, creator, subjects, genres string) bool {
+	combined := strings.ToLower(title + " " + creator + " " + subjects + " " + genres)
+	semiNonMusicTerms := []string{
+		"field recording", "environmental sound",
+		"applause", "crowd noise",
+	}
+	for _, term := range semiNonMusicTerms {
 		if strings.Contains(combined, term) {
 			return true
 		}
@@ -435,6 +459,9 @@ func classifyAlbumStreamDecision(e AlbumEvidence, r Result) (stream, decision st
 		return "excluded", "exclude"
 	}
 	if e.TrackCount >= 5 && e.AvgDurationSec < 15 && e.Short60Ratio >= 0.80 {
+		if e.HasChannelDump {
+			return "longform_candidate", "demote"
+		}
 		return "excluded", "exclude"
 	}
 	if r.Score >= IncludeThreshold {
