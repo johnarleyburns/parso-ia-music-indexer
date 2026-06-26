@@ -45,13 +45,16 @@ func setupFileLogging(cfg *config.Config) *os.File {
 }
 
 func isTransientError(errMsg string) bool {
+	lower := strings.ToLower(errMsg)
+	if strings.Contains(lower, "401") || strings.Contains(lower, "403") {
+		return false
+	}
 	transient := []string{
 		"stream:", "rate limit:", "clap:",
 		"timeout", "connection refused", "connection reset",
 		"i/o timeout", "no such host", "EOF",
 		"503", "429", "502", "500", "504",
 	}
-	lower := strings.ToLower(errMsg)
 	for _, pattern := range transient {
 		if strings.Contains(lower, strings.ToLower(pattern)) {
 			return true
@@ -880,7 +883,8 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	if err != nil {
 		errMsg := fmt.Sprintf("stream: %v", err)
 		dbMu.Lock()
-		if strings.Contains(err.Error(), "unexpected status 401") || strings.Contains(err.Error(), "unexpected status 403") {
+		if strings.Contains(err.Error(), "unexpected status 401") || strings.Contains(err.Error(), "unexpected status 403") ||
+			strings.Contains(err.Error(), "HTTP 401") || strings.Contains(err.Error(), "HTTP 403") {
 			reason := fmt.Sprintf("access-restricted: %v", err)
 			skipped, _ := db.FailAlbumAndPendingTracksUnavailable(sqlDB.Conn, track.AlbumID, reason)
 			db.MarkTrackUnavailable(sqlDB.Conn, track.ID, reason)
@@ -1083,7 +1087,12 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan s
 	if err != nil {
 		errMsg := fmt.Sprintf("metadata: %v", err)
 		dbMu.Lock()
-		if isTransientError(errMsg) {
+		if strings.Contains(err.Error(), "HTTP 401") || strings.Contains(err.Error(), "HTTP 403") {
+			reason := fmt.Sprintf("access-restricted: %v", err)
+			db.FailAlbumAndPendingTracksUnavailable(sqlDB.Conn, albumID, reason)
+			db.MarkAlbumUnavailable(sqlDB.Conn, albumID, reason)
+			dbMu.Unlock()
+		} else if isTransientError(errMsg) {
 			requeued, _ := db.RequeueAlbumForRetry(sqlDB.Conn, albumID, maxAlbumRetries, errMsg)
 			dbMu.Unlock()
 			if requeued {
