@@ -7,21 +7,23 @@ import (
 )
 
 type Config struct {
-	DBPath              string
-	Headless            bool
-	Workers             int
-	MaxBytes            int
-	ThrottleBPS         int
-	IAApiRate           int
-	ClapHost            string
-	ClapPort            int
-	ClapSidecarDir      string
-	SearchText          string
-	LibrivoxDenylistPath string
-	SeedCollections      bool
-	IAParent             string
-	SampleStrategy       string
-	SampleSkipSeconds    int
+	DBPath                  string
+	Headless                bool
+	Workers                 int
+	MaxBytes                int
+	ThrottleBPS             int
+	IAApiRate               int
+	ClapHost                string
+	ClapPort                int
+	ClapSidecarDir          string
+	SearchText              string
+	LibrivoxDenylistPath    string
+	SeedCollections         bool
+	IAParent                string
+	SampleStrategy          string
+	SampleSkipSeconds       int
+	ListenabilityMinTrackSecs int
+	ListenabilityCleanerAction string
 }
 
 func Parse() *Config {
@@ -42,6 +44,8 @@ func Parse() *Config {
 	flag.StringVar(&cfg.IAParent, "parent", envOrDefault("IA_PARENT", ""), "IA parent collection for playlists (default: fav-{username} from ia.ini)")
 	flag.StringVar(&cfg.SampleStrategy, "sample-strategy", envOrDefault("SAMPLE_STRATEGY", "midpoint"), "Audio sampling strategy: head, midpoint, or multiwindow")
 	flag.IntVar(&cfg.SampleSkipSeconds, "sample-skip-seconds", envOrDefaultInt("SAMPLE_SKIP_SECONDS", 20), "Seconds to skip from start before sampling (midpoint/multiwindow)")
+	flag.IntVar(&cfg.ListenabilityMinTrackSecs, "listenability-min-track-seconds", envOrDefaultInt("LISTENABILITY_MIN_TRACK_SECS", 60), "Minimum track duration in seconds for listenability scoring")
+	flag.StringVar(&cfg.ListenabilityCleanerAction, "listenability-cleaner-action", envOrDefault("LISTENABILITY_CLEANER_ACTION", "score-only"), "Cleaner action: score-only or mark-unavailable")
 	flag.Parse()
 
 	return cfg

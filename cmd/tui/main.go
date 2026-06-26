@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -22,6 +24,7 @@ import (
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/config"
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/db"
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/ia"
+	"github.com/johnarleyburns/parso-ia-music-indexer/internal/listenability"
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/playlist"
 	ratelimit "github.com/johnarleyburns/parso-ia-music-indexer/internal/rate"
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/tui"
@@ -96,6 +99,10 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 	nextEnhancerID := 1
 	enhancerStopChs := make(map[int]chan struct{})
 
+	cleanerCount := 0
+	nextCleanerID := 1
+	cleanerStopChs := make(map[int]chan struct{})
+
 	dbMu := &sync.Mutex{}
 	iaClient := ia.NewClient(60 * time.Second)
 	iaClient.Transport = tui.NewInstrumentedTransport(metrics)
@@ -113,7 +120,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 	events <- tui.ActivityEvent{
 		Type:      tui.EventInfo,
 		Timestamp: time.Now(),
-		Message:   fmt.Sprintf("Application started. %s. [s] coordinator  [r] resolvers  [w] analyzers  [e] enhancers", collMsg),
+		Message:   fmt.Sprintf("Application started. %s. [s] coordinator  [r] resolvers  [w] analyzers  [e] enhancers  [l] cleaners", collMsg),
 	}
 
 	for {
@@ -218,19 +225,48 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 			}
 			safeGo(func() { tagEnhancerLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, eID, metrics) }, events, eID)
 		case tui.CmdRemoveEnhancer:
-		if enhancerCount > 0 {
-			enhancerCount--
-			for id, ch := range enhancerStopChs {
-				close(ch)
-				delete(enhancerStopChs, id)
-				break
+			if enhancerCount > 0 {
+				enhancerCount--
+				for id, ch := range enhancerStopChs {
+					close(ch)
+					delete(enhancerStopChs, id)
+					break
+				}
+				events <- tui.ActivityEvent{
+					Type:      tui.EventWorkerStopped,
+					Timestamp: time.Now(),
+					Message:   fmt.Sprintf("Enhancer removed (pool: %d)", enhancerCount),
+				}
 			}
-			events <- tui.ActivityEvent{
-				Type:      tui.EventWorkerStopped,
-				Timestamp: time.Now(),
-				Message:   fmt.Sprintf("Enhancer removed (pool: %d)", enhancerCount),
-			}
-		}
+
+			case tui.CmdAddCleaner:
+				cleanerCount++
+				cID := fmt.Sprintf("cleaner-%d", nextCleanerID)
+				nextCleanerID++
+				stopCh := make(chan struct{})
+				cleanerStopChs[nextCleanerID-1] = stopCh
+				events <- tui.ActivityEvent{
+					Type:       tui.EventWorkerStarted,
+					Timestamp:  time.Now(),
+					Identifier: cID,
+					WorkerID:   cID,
+					Message:    fmt.Sprintf("Cleaner %s started (pool: %d)", cID, cleanerCount),
+				}
+				safeGo(func() { listenabilityCleanerLoop(sqlDB, events, stopCh, dbMu, clapClient, cID, metrics) }, events, cID)
+			case tui.CmdRemoveCleaner:
+				if cleanerCount > 0 {
+					cleanerCount--
+					for id, ch := range cleanerStopChs {
+						close(ch)
+						delete(cleanerStopChs, id)
+						break
+					}
+					events <- tui.ActivityEvent{
+						Type:      tui.EventWorkerStopped,
+						Timestamp: time.Now(),
+						Message:   fmt.Sprintf("Cleaner removed (pool: %d)", cleanerCount),
+					}
+				}
 
 			case tui.CmdShutdown:
 				if coordRunning {
@@ -243,6 +279,9 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 			close(ch)
 		}
 		for _, ch := range enhancerStopChs {
+			close(ch)
+		}
+		for _, ch := range cleanerStopChs {
 			close(ch)
 		}
 		return
@@ -806,6 +845,226 @@ func tagEnhancerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-cha
 	}
 }
 
+func listenabilityCleanerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
+	dbMu *sync.Mutex, clapClient clap.CLAPClient, workerID string, metrics *tui.Metrics) {
+
+	batchSize := 10
+	version := listenability.Version
+
+	var promptCache map[string][]float32
+
+	getCachedPromptVec := func(ctx context.Context, text string) ([]float32, error) {
+		if v, ok := promptCache[text]; ok {
+			return v, nil
+		}
+		vec, err := clapClient.GetTextEmbedding(ctx, text)
+		if err != nil {
+			return nil, err
+		}
+		promptCache[text] = vec
+		return vec, nil
+	}
+
+	buildPromptCache := func() error {
+		promptCache = make(map[string][]float32)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		allPrompts := append(listenability.PositivePrompts, listenability.NegativePrompts...)
+		for _, p := range allPrompts {
+			if _, err := getCachedPromptVec(ctx, p); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for {
+		select {
+		case <-stopCh:
+			return
+		default:
+		}
+
+		if promptCache == nil {
+			if err := buildPromptCache(); err != nil {
+				events <- tui.ActivityEvent{
+					Type:      tui.EventInfo,
+					Timestamp: time.Now(),
+					WorkerID:  workerID,
+					Message:   fmt.Sprintf("[%s] Failed to build prompt cache: %v — retrying in 30s", workerID, err),
+				}
+				sleepOrStop(30*time.Second, stopCh)
+				continue
+			}
+		}
+
+		dbMu.Lock()
+		claims, err := db.ClaimListenabilityCleanupBatch(sqlDB.Conn, workerID, version, batchSize)
+		dbMu.Unlock()
+		if err != nil {
+			events <- tui.ActivityEvent{
+				Type:      tui.EventInfo,
+				Timestamp: time.Now(),
+				WorkerID:  workerID,
+				Message:   fmt.Sprintf("[%s] Claim cleanup batch error: %v", workerID, err),
+				Error:     err.Error(),
+			}
+			sleepOrStop(10*time.Second, stopCh)
+			continue
+		}
+
+		if len(claims) == 0 {
+			sleepOrStop(15*time.Second, stopCh)
+			continue
+		}
+
+		scoredCount := 0
+		for _, claim := range claims {
+			select {
+			case <-stopCh:
+				return
+			default:
+			}
+
+			albEv, _ := db.GetAlbumListenabilityEvidence(sqlDB.Conn, claim.AlbumID)
+
+			var promptEv listenability.PromptEvidence
+
+			if claim.HasEmbedding {
+				dbMu.Lock()
+				clapBlob, qualityScore, embErr := db.GetTrackEmbeddingForCleanup(sqlDB.Conn, claim.TrackID)
+				dbMu.Unlock()
+				if embErr == nil && len(clapBlob) > 0 {
+					clapVec := decodeF16ForCleanup(clapBlob)
+					promptEv = computePromptEvidence(clapVec, promptCache)
+					claim.QualityScore = sql.NullFloat64{Float64: qualityScore, Valid: true}
+				}
+			}
+
+			ev := listenability.TrackEvidence{
+				TrackID:      claim.TrackID,
+				AlbumID:      claim.AlbumID,
+				Title:        claim.Title,
+				Filename:     claim.Filename,
+				DurationSec:  claim.Duration,
+				BitrateKbps:  claim.Bitrate,
+				Tags:         claim.Tags,
+				QualityScore: 0,
+				Album:        albEv,
+				Prompt:       promptEv,
+			}
+			if claim.QualityScore.Valid {
+				ev.QualityScore = claim.QualityScore.Float64
+			}
+
+			result := listenability.ScoreTrack(ev)
+
+			dbMu.Lock()
+			if err := db.UpdateTrackListenability(sqlDB.Conn, claim.TrackID, result, workerID); err != nil {
+				dbMu.Unlock()
+				events <- tui.ActivityEvent{
+					Type:      tui.EventInfo,
+					Timestamp: time.Now(),
+					WorkerID:  workerID,
+					Message:   fmt.Sprintf("[%s] Update listenability error for track %d: %v", workerID, claim.TrackID, err),
+					Error:     err.Error(),
+				}
+				continue
+			}
+			dbMu.Unlock()
+
+			scoredCount++
+		}
+
+		if scoredCount > 0 {
+			events <- tui.ActivityEvent{
+				Type:      tui.EventCleanerBatch,
+				Timestamp: time.Now(),
+				WorkerID:  workerID,
+				Message:   fmt.Sprintf("[%s] Scored %d tracks (listenability)", workerID, scoredCount),
+				Count:     scoredCount,
+			}
+		}
+	}
+}
+
+func decodeF16ForCleanup(b []byte) []float32 {
+	clapVec := make([]float32, len(b)/2)
+	for i := range clapVec {
+		v := uint16(b[i*2]) | uint16(b[i*2+1])<<8
+		clapVec[i] = float32FromF16(v)
+	}
+	return clapVec
+}
+
+func float32FromF16(v uint16) float32 {
+	sign := float32(1)
+	if v&0x8000 != 0 {
+		sign = -1
+	}
+	exp := int((v >> 10) & 0x1F)
+	mant := int(v & 0x3FF)
+	if exp == 0 {
+		return sign * float32(mant) / float32(1<<24)
+	}
+	if exp == 31 {
+		if mant != 0 {
+			return float32(math.NaN())
+		}
+		return sign * float32(1e10)
+	}
+	return sign * (1.0 + float32(mant)/1024.0) * float32(int(1)<<(exp-15))
+}
+
+func computePromptEvidence(clapVec []float32, promptCache map[string][]float32) listenability.PromptEvidence {
+	var ev listenability.PromptEvidence
+
+	var positiveSum float64
+	var positiveCount int
+	for _, p := range listenability.PositivePrompts {
+		if pv, ok := promptCache[p]; ok {
+			positiveSum += dotProductFloat32(clapVec, pv)
+			positiveCount++
+		}
+	}
+	if positiveCount > 0 {
+		ev.MusicSimilarity = positiveSum / float64(positiveCount)
+	}
+
+	var negativeSum float64
+	var maxNeg float64
+	var maxNegName string
+	for _, p := range listenability.NegativePrompts {
+		if pv, ok := promptCache[p]; ok {
+			dp := dotProductFloat32(clapVec, pv)
+			negativeSum += dp
+			if dp > maxNeg {
+				maxNeg = dp
+				maxNegName = p
+			}
+		}
+	}
+	if len(listenability.NegativePrompts) > 0 {
+		ev.NegativeSimilarity = negativeSum / float64(len(listenability.NegativePrompts))
+	}
+	ev.MusicMinusNegative = ev.MusicSimilarity - ev.NegativeSimilarity
+	ev.StrongestNegativeName = maxNegName
+
+	return ev
+}
+
+func dotProductFloat32(a, b []float32) float64 {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	var sum float64
+	for i := 0; i < n; i++ {
+		sum += float64(a[i]) * float64(b[i])
+	}
+	return sum
+}
+
 func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent,
 	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, track db.ClaimedTrack, metrics *tui.Metrics,
 	iaLimiter *ratelimit.Limiter, bwLimiter *rate.Limiter, stopCh <-chan struct{}) (ok bool) {
@@ -848,6 +1107,46 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 		Identifier: fmt.Sprintf("%s/%s", track.AlbumID, track.Filename),
 		WorkerID:   workerID,
 		Message:    fmt.Sprintf("[%s] Analyzing: %s", workerID, trackLabel),
+	}
+
+	albumEvidence := listenability.AlbumEvidence{
+		AlbumID:             track.AlbumID,
+		PositiveDurationCnt: 1,
+		AvgDurationSec:      track.Duration,
+	}
+
+	precheckResult := listenability.ScoreTrack(listenability.TrackEvidence{
+		TrackID:      track.ID,
+		AlbumID:      track.AlbumID,
+		Title:        track.Title,
+		Filename:     track.Filename,
+		DurationSec:  track.Duration,
+		BitrateKbps:  track.Bitrate,
+		Tags:         track.Tags,
+		QualityScore: 0,
+		Album:        albumEvidence,
+	})
+
+	if precheckResult.Decision == "exclude" && precheckResult.Stream == "excluded" {
+		dbMu.Lock()
+		db.UpdateTrackListenability(sqlDB.Conn, track.ID, precheckResult, workerID)
+		if track.Duration > 0 && track.Duration < listenability.MinTrackSeconds {
+			db.MarkTrackUnavailable(sqlDB.Conn, track.ID, fmt.Sprintf("listenability: duration %.1fs below %ds minimum", track.Duration, listenability.MinTrackSeconds))
+		} else if track.Duration <= 0 {
+			db.MarkTrackUnavailable(sqlDB.Conn, track.ID, "listenability: missing duration")
+		} else {
+			db.MarkTrackUnavailable(sqlDB.Conn, track.ID, fmt.Sprintf("listenability: excluded by precheck (score=%.3f, reasons=%v)", precheckResult.Score, precheckResult.Reasons))
+		}
+		dbMu.Unlock()
+		events <- tui.ActivityEvent{
+			Type:            tui.EventAnalysisUnavailable,
+			Timestamp:       time.Now(),
+			Identifier:      trackLabel,
+			WorkerID:        workerID,
+			Message:         fmt.Sprintf("[%s] Excluded %s: listenability precheck (score=%.3f tier=%s decision=%s)", workerID, trackLabel, precheckResult.Score, precheckResult.Tier, precheckResult.Decision),
+			QualityScore:    precheckResult.Score,
+		}
+		return true
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -1038,6 +1337,19 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 		}
 		return false
 	}
+
+	metaResult := listenability.ScoreTrack(listenability.TrackEvidence{
+		TrackID:      track.ID,
+		AlbumID:      track.AlbumID,
+		Title:        track.Title,
+		Filename:     track.Filename,
+		DurationSec:  track.Duration,
+		BitrateKbps:  track.Bitrate,
+		QualityScore: compositeScore,
+		Tags:         track.Tags,
+		Album:        albumEvidence,
+	})
+	_ = db.UpdateTrackListenability(sqlDB.Conn, track.ID, metaResult, workerID)
 	db.MarkTrackCompleted(sqlDB.Conn, track.ID)
 	dbMu.Unlock()
 
@@ -1046,7 +1358,7 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 		Timestamp:    time.Now(),
 		Identifier:   trackLabel,
 		WorkerID:     workerID,
-		Message:      fmt.Sprintf("[%s] Complete %s (quality: %.2f)", workerID, trackLabel, compositeScore),
+		Message:      fmt.Sprintf("[%s] Complete %s (quality: %.2f listenability: %.3f/%s/%s)", workerID, trackLabel, compositeScore, metaResult.Score, metaResult.Tier, metaResult.Decision),
 		QualityScore: compositeScore,
 	}
 	metrics.RecordAnalyzerCompletion()
@@ -1254,6 +1566,10 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan s
 		}
 	}
 
+	albEv, _ := db.GetAlbumListenabilityEvidence(sqlDB.Conn, albumID)
+	albResult := listenability.ScoreAlbum(albEv)
+	_ = db.UpdateAlbumListenability(sqlDB.Conn, albumID, albResult)
+
 	dbMu.Unlock()
 
 	events <- tui.ActivityEvent{
@@ -1410,6 +1726,7 @@ func runHeadless(cfg *config.Config) {
 
 	strategyCounts, _ := db.GetEmbeddingStrategyCounts(sqlDB.Conn)
 	coverage, _ := db.GetLexicalCoverage(sqlDB.Conn)
+	listenCoverage, _ := db.GetListenabilityCoverage(sqlDB.Conn, listenability.Version)
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetEscapeHTML(false)
@@ -1464,6 +1781,16 @@ func runHeadless(cfg *config.Config) {
 		},
 		"embedding_strategies": strategyCounts,
 		"lexical_coverage":     coverageMap,
+		"listenability_coverage": map[string]interface{}{
+			"total_completed":           listenCoverage.TotalCompletedTracks,
+			"with_current_version":      listenCoverage.TracksWithCurrentVersion,
+			"missing_version":           listenCoverage.TracksMissingVersion,
+			"stale_version":             listenCoverage.TracksWithStaleVersion,
+			"would_mark_unavailable":    listenCoverage.WouldMarkUnavailable,
+			"completed_under_60s":       listenCoverage.CompletedTracksUnder60,
+			"by_tier":                   listenCoverage.CountByTier,
+			"by_decision":               listenCoverage.CountByDecision,
+		},
 	})
 
 	events := tui.NewEventChannel()

@@ -38,6 +38,12 @@ type ClaimedTrack struct {
 	DownloadURL    string
 	AlbumTitle     string
 	CollectionName string
+	Duration       float64
+	Bitrate        int
+	Tags           string
+	AlbumSubjects  string
+	AlbumGenres    string
+	AlbumListenabilityScore float64
 }
 
 type TrackInsert struct {
@@ -544,7 +550,10 @@ func ClaimNextTrackBatch(db *sql.DB, workerID string, batchSize int) ([]ClaimedT
 		        COALESCE(a.title, a.ia_identifier),
 		        COALESCE((SELECT c.title FROM collection_albums ca
 		                  JOIN collections c ON ca.collection_id = c.collection_id
-		                  WHERE ca.album_id = t.album_id LIMIT 1), '')
+		                  WHERE ca.album_id = t.album_id LIMIT 1), ''),
+		        COALESCE(t.duration, 0), COALESCE(t.bitrate, 0), COALESCE(t.tags, ''),
+		        COALESCE(a.subjects, ''), COALESCE(a.genres, ''),
+		        COALESCE(a.listenability_score, 0)
 		 FROM tracks t
 		 INNER JOIN albums a ON t.album_id = a.ia_identifier
 		 WHERE t.status = 'pending'
@@ -564,7 +573,10 @@ func ClaimNextTrackBatch(db *sql.DB, workerID string, batchSize int) ([]ClaimedT
 	var tracks []ClaimedTrack
 	for rows.Next() {
 		var t ClaimedTrack
-		if err := rows.Scan(&t.ID, &t.AlbumID, &t.Filename, &t.Title, &t.DownloadURL, &t.AlbumTitle, &t.CollectionName); err != nil {
+		if err := rows.Scan(&t.ID, &t.AlbumID, &t.Filename, &t.Title, &t.DownloadURL,
+			&t.AlbumTitle, &t.CollectionName,
+			&t.Duration, &t.Bitrate, &t.Tags,
+			&t.AlbumSubjects, &t.AlbumGenres, &t.AlbumListenabilityScore); err != nil {
 			return nil, err
 		}
 		tracks = append(tracks, t)
@@ -724,7 +736,10 @@ func SearchCompletedTracks(sqlDB *sql.DB, query string, limit, offset int) ([]Tr
 	if query == "" {
 		err = sqlDB.QueryRow(`SELECT count(*) FROM tracks t
 			INNER JOIN track_embeddings e ON t.id = e.track_id
-			WHERE t.status = 'completed'`).Scan(&totalCount)
+			WHERE t.status = 'completed'
+			  AND (t.listenability_decision IS NULL OR t.listenability_decision != 'exclude')
+			  AND (t.listenability_stream IS NULL OR t.listenability_stream != 'excluded')
+			  AND (t.listenability_stream IS NULL OR t.listenability_stream != 'longform_candidate')`).Scan(&totalCount)
 		if err != nil {
 			return nil, 0, fmt.Errorf("count: %w", err)
 		}
@@ -734,6 +749,9 @@ func SearchCompletedTracks(sqlDB *sql.DB, query string, limit, offset int) ([]Tr
 			INNER JOIN track_embeddings e ON t.id = e.track_id
 			INNER JOIN albums a ON t.album_id = a.ia_identifier
 			WHERE t.status = 'completed'
+			  AND (t.listenability_decision IS NULL OR t.listenability_decision != 'exclude')
+			  AND (t.listenability_stream IS NULL OR t.listenability_stream != 'excluded')
+			  AND (t.listenability_stream IS NULL OR t.listenability_stream != 'longform_candidate')
 			ORDER BY a.downloads DESC, e.quality_score DESC, t.updated_at DESC
 			LIMIT ? OFFSET ?`, limit, offset)
 	} else {
@@ -742,6 +760,9 @@ func SearchCompletedTracks(sqlDB *sql.DB, query string, limit, offset int) ([]Tr
 			INNER JOIN track_embeddings e ON t.id = e.track_id
 			INNER JOIN albums a ON t.album_id = a.ia_identifier
 			WHERE t.status = 'completed'
+			  AND (t.listenability_decision IS NULL OR t.listenability_decision != 'exclude')
+			  AND (t.listenability_stream IS NULL OR t.listenability_stream != 'excluded')
+			  AND (t.listenability_stream IS NULL OR t.listenability_stream != 'longform_candidate')
 			  AND (t.title LIKE ? OR t.filename LIKE ? OR t.album_id LIKE ? OR a.title LIKE ? OR t.tags LIKE ?)`,
 			pattern, pattern, pattern, pattern, pattern).Scan(&totalCount)
 		if err != nil {
@@ -753,6 +774,9 @@ func SearchCompletedTracks(sqlDB *sql.DB, query string, limit, offset int) ([]Tr
 			INNER JOIN track_embeddings e ON t.id = e.track_id
 			INNER JOIN albums a ON t.album_id = a.ia_identifier
 			WHERE t.status = 'completed'
+			  AND (t.listenability_decision IS NULL OR t.listenability_decision != 'exclude')
+			  AND (t.listenability_stream IS NULL OR t.listenability_stream != 'excluded')
+			  AND (t.listenability_stream IS NULL OR t.listenability_stream != 'longform_candidate')
 			  AND (t.title LIKE ? OR t.filename LIKE ? OR t.album_id LIKE ? OR a.title LIKE ? OR t.tags LIKE ?)
 			ORDER BY t.updated_at DESC
 			LIMIT ? OFFSET ?`, pattern, pattern, pattern, pattern, pattern, limit, offset)

@@ -54,7 +54,11 @@ func QuerySimilar(db *sql.DB, trackID int, limit int) ([]SimilarTrack, error) {
 	rows, err := db.Query(`SELECT e.track_id, COALESCE(t.title, t.filename), t.album_id, e.clap, e.mfcc, e.chroma, e.quality_score
 		FROM track_embeddings e
 		INNER JOIN tracks t ON e.track_id = t.id
-		WHERE e.track_id != ?`, trackID)
+		WHERE e.track_id != ?
+		  AND t.status = 'completed'
+		  AND (t.listenability_decision IS NULL OR t.listenability_decision != 'exclude')
+		  AND (t.listenability_stream IS NULL OR t.listenability_stream != 'excluded')
+		  AND (t.listenability_stream IS NULL OR t.listenability_stream != 'longform_candidate')`, trackID)
 	if err != nil {
 		return nil, fmt.Errorf("select all: %w", err)
 	}
@@ -194,7 +198,10 @@ func SearchByText(db *sql.DB, queryVec []float32, queryText string, limit int) (
 		FROM track_embeddings e
 		INNER JOIN tracks t ON e.track_id = t.id
 		INNER JOIN albums a ON t.album_id = a.ia_identifier
-		WHERE t.status = 'completed'`)
+		WHERE t.status = 'completed'
+		  AND (t.listenability_decision IS NULL OR t.listenability_decision != 'exclude')
+		  AND (t.listenability_stream IS NULL OR t.listenability_stream != 'excluded')
+		  AND (t.listenability_stream IS NULL OR t.listenability_stream != 'longform_candidate')`)
 	if err != nil {
 		return nil, fmt.Errorf("search by text: %w", err)
 	}

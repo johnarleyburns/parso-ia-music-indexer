@@ -23,6 +23,8 @@ const (
 	EventAlbumFailed          EventType = "album_failed"
 	EventAlbumUnavailable     EventType = "album_unavailable"
 	EventAnalysisUnavailable  EventType = "analysis_unavailable"
+	EventCleanerStarted       EventType = "cleaner_started"
+	EventCleanerBatch         EventType = "cleaner_batch"
 	EventInfo                 EventType = "info"
 )
 

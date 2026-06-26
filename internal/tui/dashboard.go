@@ -48,6 +48,9 @@ type DashboardModel struct {
 	EnhancerCount  int
 	EnhancerStates map[string]*workerState
 
+	CleanerCount  int
+	CleanerStates map[string]*workerState
+
 	Events []ActivityEvent
 }
 
@@ -63,6 +66,8 @@ func NewDashboardModel(sqlDB *sql.DB) DashboardModel {
 		AnalyzerStates:  make(map[string]*workerState),
 		EnhancerCount:   0,
 		EnhancerStates:  make(map[string]*workerState),
+		CleanerCount:    0,
+		CleanerStates:   make(map[string]*workerState),
 		Events:          make([]ActivityEvent, 0),
 	}
 }
@@ -77,6 +82,10 @@ func isResolver(id string) bool {
 
 func isEnhancer(id string) bool {
 	return strings.HasPrefix(id, "enhancer-")
+}
+
+func isCleaner(id string) bool {
+	return strings.HasPrefix(id, "cleaner-")
 }
 
 func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
@@ -125,6 +134,9 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 			} else if isEnhancer(msg.WorkerID) {
 				m.EnhancerCount++
 				m.EnhancerStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
+			} else if isCleaner(msg.WorkerID) {
+				m.CleanerCount++
+				m.CleanerStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
 			} else {
 				m.AnalyzerCount++
 				m.AnalyzerStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
@@ -142,6 +154,11 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 					m.EnhancerCount--
 				}
 				delete(m.EnhancerStates, msg.WorkerID)
+			} else if isCleaner(msg.WorkerID) {
+				if m.CleanerCount > 0 {
+					m.CleanerCount--
+				}
+				delete(m.CleanerStates, msg.WorkerID)
 			} else {
 				if m.AnalyzerCount > 0 {
 					m.AnalyzerCount--
@@ -156,6 +173,10 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 			} else if strings.Contains(msg.Message, "Enhancer") {
 				if m.EnhancerCount > 0 {
 					m.EnhancerCount--
+				}
+			} else if strings.Contains(msg.Message, "Cleaner") {
+				if m.CleanerCount > 0 {
+					m.CleanerCount--
 				}
 			} else {
 				if m.AnalyzerCount > 0 {
@@ -207,6 +228,13 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 				}
 				if ws, ok := m.EnhancerStates[msg.WorkerID]; ok {
 					ws.ProcessedCount++
+					ws.CurrentTask = ""
+				}
+			}
+		case EventCleanerBatch:
+			if msg.WorkerID != "" {
+				if ws, ok := m.CleanerStates[msg.WorkerID]; ok {
+					ws.ProcessedCount += msg.Count
 					ws.CurrentTask = ""
 				}
 			}
@@ -343,9 +371,12 @@ func (m DashboardModel) buildRightPanel(titleStyle, panelBorder lipgloss.Style, 
 	}
 	enhancerSection := m.buildPoolSection(sectionTitle, "Enhancer Pool", m.EnhancerCount, m.EnhancerStates, enhancerControls)
 
+	cleanerControls := "[l] add  [L] remove"
+	cleanerSection := m.buildPoolSection(sectionTitle, "Cleaner Pool", m.CleanerCount, m.CleanerStates, cleanerControls)
+
 	const panelOverhead = 4 // 2 border + 2 padding
 
-	controlsContentHeight := lipgloss.Height(coordSection) + lipgloss.Height(resolverSection) + lipgloss.Height(analyzerSection) + lipgloss.Height(enhancerSection) + 2
+	controlsContentHeight := lipgloss.Height(coordSection) + lipgloss.Height(resolverSection) + lipgloss.Height(analyzerSection) + lipgloss.Height(enhancerSection) + lipgloss.Height(cleanerSection) + 4
 
 	availBodyHeight := m.Height - 9 // tab(1) + status(4) + help(1) + title+gaps(3)
 
@@ -358,7 +389,7 @@ func (m DashboardModel) buildRightPanel(titleStyle, panelBorder lipgloss.Style, 
 	feedContent += RenderActivityFeed(m.Events, width-4, feedContentHeight-1)
 
 	controlsPanel := panelBorder.Width(width).Render(
-		coordSection + "\n" + resolverSection + "\n" + analyzerSection + "\n" + enhancerSection,
+		coordSection + "\n" + resolverSection + "\n" + analyzerSection + "\n" + enhancerSection + "\n" + cleanerSection,
 	)
 	feedPanel := panelBorder.Width(width).Render(feedContent)
 

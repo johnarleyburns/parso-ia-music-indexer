@@ -81,10 +81,19 @@ func (db *DB) migrate() error {
 			prechecked    INTEGER NOT NULL DEFAULT 0,
 			subjects      TEXT,
 			genres        TEXT,
+			listenability_score     REAL,
+			listenability_tier      TEXT,
+			listenability_decision  TEXT,
+			listenability_stream    TEXT,
+			listenability_reasons   TEXT,
+			listenability_components TEXT,
+			listenability_version   TEXT,
+			listenability_checked_at TEXT,
 			created_at    TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_albums_status ON albums(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_albums_listenability_score ON albums(listenability_score)`,
 
 		`CREATE TABLE IF NOT EXISTS collection_albums (
 			collection_id TEXT NOT NULL REFERENCES collections(collection_id),
@@ -112,6 +121,16 @@ func (db *DB) migrate() error {
 			retry_count   INTEGER NOT NULL DEFAULT 0,
 			error_message TEXT,
 			tags          TEXT,
+			listenability_score     REAL,
+			listenability_tier      TEXT,
+			listenability_decision  TEXT,
+			listenability_stream    TEXT,
+			listenability_reasons   TEXT,
+			listenability_components TEXT,
+			listenability_version   TEXT,
+			listenability_checked_at TEXT,
+			listenability_worker_id TEXT,
+			listenability_locked_at TEXT,
 			created_at    TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
 			UNIQUE(album_id, filename)
@@ -119,6 +138,8 @@ func (db *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_tracks_status ON tracks(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_tracks_locked ON tracks(status, locked_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_tracks_listenability_work ON tracks(status, listenability_version, listenability_locked_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_tracks_listenability_score ON tracks(listenability_score)`,
 
 		`CREATE TABLE IF NOT EXISTS track_embeddings (
 			track_id        INTEGER PRIMARY KEY REFERENCES tracks(id),
@@ -222,6 +243,34 @@ func (db *DB) migrateSchemaChanges() error {
 		}
 	}
 
+	if tableExists(db.Conn, "tracks") && !columnExists(db.Conn, "tracks", "listenability_score") {
+		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_score REAL")
+		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_tier TEXT")
+		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_decision TEXT")
+		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_stream TEXT")
+		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_reasons TEXT")
+		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_components TEXT")
+		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_version TEXT")
+		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_checked_at TEXT")
+		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_worker_id TEXT")
+		db.Conn.Exec("ALTER TABLE tracks ADD COLUMN listenability_locked_at TEXT")
+	}
+
+	if tableExists(db.Conn, "albums") && !columnExists(db.Conn, "albums", "listenability_score") {
+		db.Conn.Exec("ALTER TABLE albums ADD COLUMN listenability_score REAL")
+		db.Conn.Exec("ALTER TABLE albums ADD COLUMN listenability_tier TEXT")
+		db.Conn.Exec("ALTER TABLE albums ADD COLUMN listenability_decision TEXT")
+		db.Conn.Exec("ALTER TABLE albums ADD COLUMN listenability_stream TEXT")
+		db.Conn.Exec("ALTER TABLE albums ADD COLUMN listenability_reasons TEXT")
+		db.Conn.Exec("ALTER TABLE albums ADD COLUMN listenability_components TEXT")
+		db.Conn.Exec("ALTER TABLE albums ADD COLUMN listenability_version TEXT")
+		db.Conn.Exec("ALTER TABLE albums ADD COLUMN listenability_checked_at TEXT")
+	}
+
+	db.Conn.Exec(`CREATE INDEX IF NOT EXISTS idx_tracks_listenability_work ON tracks(status, listenability_version, listenability_locked_at)`)
+	db.Conn.Exec(`CREATE INDEX IF NOT EXISTS idx_tracks_listenability_score ON tracks(listenability_score)`)
+	db.Conn.Exec(`CREATE INDEX IF NOT EXISTS idx_albums_listenability_score ON albums(listenability_score)`)
+
 	return nil
 }
 
@@ -320,14 +369,22 @@ func recreateAlbumsWithUnavailable(sqlDB *sql.DB) error {
 			prechecked    INTEGER NOT NULL DEFAULT 0,
 			subjects      TEXT,
 			genres        TEXT,
+			listenability_score     REAL,
+			listenability_tier      TEXT,
+			listenability_decision  TEXT,
+			listenability_stream    TEXT,
+			listenability_reasons   TEXT,
+			listenability_components TEXT,
+			listenability_version   TEXT,
+			listenability_checked_at TEXT,
 			created_at    TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 		)`)
 	if err != nil {
 		return fmt.Errorf("create albums_new: %w", err)
 	}
-	_, err = sqlDB.Exec(`INSERT INTO albums_new(ia_identifier, title, creator, collection, art_url, track_count, status, error_message, downloads, retry_count, prechecked, subjects, genres, created_at, updated_at)
-		SELECT ia_identifier, title, creator, collection, art_url, track_count, status, error_message, downloads, retry_count, prechecked, subjects, genres, created_at, updated_at FROM albums`)
+	_, err = sqlDB.Exec(`INSERT INTO albums_new(ia_identifier, title, creator, collection, art_url, track_count, status, error_message, downloads, retry_count, prechecked, subjects, genres, listenability_score, listenability_tier, listenability_decision, listenability_stream, listenability_reasons, listenability_components, listenability_version, listenability_checked_at, created_at, updated_at)
+		SELECT ia_identifier, title, creator, collection, art_url, track_count, status, error_message, downloads, retry_count, prechecked, subjects, genres, listenability_score, listenability_tier, listenability_decision, listenability_stream, listenability_reasons, listenability_components, listenability_version, listenability_checked_at, created_at, updated_at FROM albums`)
 	if err != nil {
 		return fmt.Errorf("copy albums: %w", err)
 	}
@@ -365,6 +422,16 @@ func recreateTracksWithUnavailable(sqlDB *sql.DB) error {
 			retry_count   INTEGER NOT NULL DEFAULT 0,
 			error_message TEXT,
 			tags          TEXT,
+			listenability_score     REAL,
+			listenability_tier      TEXT,
+			listenability_decision  TEXT,
+			listenability_stream    TEXT,
+			listenability_reasons   TEXT,
+			listenability_components TEXT,
+			listenability_version   TEXT,
+			listenability_checked_at TEXT,
+			listenability_worker_id TEXT,
+			listenability_locked_at TEXT,
 			created_at    TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
 			UNIQUE(album_id, filename)
@@ -372,8 +439,8 @@ func recreateTracksWithUnavailable(sqlDB *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("create tracks_new: %w", err)
 	}
-	_, err = sqlDB.Exec(`INSERT INTO tracks_new(id, album_id, filename, title, track_number, format, bitrate, duration, download_url, status, worker_id, locked_at, retry_count, error_message, tags, created_at, updated_at)
-		SELECT id, album_id, filename, title, track_number, format, bitrate, duration, download_url, status, worker_id, locked_at, retry_count, error_message, tags, created_at, updated_at FROM tracks`)
+	_, err = sqlDB.Exec(`INSERT INTO tracks_new(id, album_id, filename, title, track_number, format, bitrate, duration, download_url, status, worker_id, locked_at, retry_count, error_message, tags, listenability_score, listenability_tier, listenability_decision, listenability_stream, listenability_reasons, listenability_components, listenability_version, listenability_checked_at, listenability_worker_id, listenability_locked_at, created_at, updated_at)
+		SELECT id, album_id, filename, title, track_number, format, bitrate, duration, download_url, status, worker_id, locked_at, retry_count, error_message, tags, listenability_score, listenability_tier, listenability_decision, listenability_stream, listenability_reasons, listenability_components, listenability_version, listenability_checked_at, listenability_worker_id, listenability_locked_at, created_at, updated_at FROM tracks`)
 	if err != nil {
 		return fmt.Errorf("copy tracks: %w", err)
 	}
