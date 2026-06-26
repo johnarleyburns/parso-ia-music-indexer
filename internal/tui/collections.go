@@ -210,6 +210,10 @@ func (m CollectionsModel) updateView(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 				}
 
 				m.prevAnalyzed[c.CollectionID] = st.Analyzed
+				avgL := "---"
+				if st.AvgListenability > 0 {
+					avgL = fmt.Sprintf("%.3f", st.AvgListenability)
+				}
 				rows[i] = table.Row{
 					title,
 					source,
@@ -218,6 +222,7 @@ func (m CollectionsModel) updateView(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 					fmt.Sprintf("%d", st.Total),
 					fmt.Sprintf("%d", st.Analyzed),
 					pct,
+					avgL,
 					status,
 				}
 			}
@@ -639,11 +644,12 @@ func collectionsColumns() []table.Column {
 	return []table.Column{
 		{Title: "Title", Width: 28},
 		{Title: "Source", Width: 10},
-		{Title: "URL", Width: 30},
-		{Title: "ID", Width: 20},
-		{Title: "Tracks", Width: 8},
-		{Title: "Analyzed", Width: 9},
+		{Title: "URL", Width: 28},
+		{Title: "ID", Width: 18},
+		{Title: "Tracks", Width: 7},
+		{Title: "Analyzed", Width: 8},
 		{Title: "% Done", Width: 7},
+		{Title: "Avg L", Width: 7},
 		{Title: "Status", Width: 10},
 	}
 }

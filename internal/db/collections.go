@@ -60,8 +60,9 @@ type CollectionStats struct {
 }
 
 type CollectionTrackStat struct {
-	Total    int
-	Analyzed int
+	Total            int
+	Analyzed         int
+	AvgListenability float64
 }
 
 func InsertCollection(db *sql.DB, c CollectionInsert) error {
@@ -225,7 +226,8 @@ func GetCollectionTrackStats(db *sql.DB) (map[string]CollectionTrackStat, error)
 	rows, err := db.Query(
 		`SELECT ca.collection_id,
 		        count(t.id) AS total,
-		        count(CASE WHEN t.status='completed' THEN 1 END) AS analyzed
+		        count(CASE WHEN t.status='completed' THEN 1 END) AS analyzed,
+		        COALESCE(AVG(CASE WHEN t.status='completed' THEN t.listenability_score END), 0.0) AS avg_listen
 		 FROM collection_albums ca
 		 JOIN tracks t ON t.album_id = ca.album_id
 		 GROUP BY ca.collection_id`,
@@ -239,7 +241,7 @@ func GetCollectionTrackStats(db *sql.DB) (map[string]CollectionTrackStat, error)
 	for rows.Next() {
 		var collectionID string
 		var s CollectionTrackStat
-		if err := rows.Scan(&collectionID, &s.Total, &s.Analyzed); err != nil {
+		if err := rows.Scan(&collectionID, &s.Total, &s.Analyzed, &s.AvgListenability); err != nil {
 			return nil, err
 		}
 		stats[collectionID] = s
