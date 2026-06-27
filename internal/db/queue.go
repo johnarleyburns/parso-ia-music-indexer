@@ -112,18 +112,20 @@ type UntaggedAlbum struct {
 func ClaimUntaggedAlbum(db *sql.DB) (*UntaggedAlbum, error) {
 	var album UntaggedAlbum
 	err := db.QueryRow(`
+		WITH untagged_albums AS (
+			SELECT DISTINCT t.album_id
+			FROM tracks t
+			INNER JOIN track_embeddings e ON t.id = e.track_id
+			WHERE t.status = 'completed' AND (t.tags IS NULL OR t.tags = '')
+		)
 		SELECT a.ia_identifier, a.title, a.creator,
 			COALESCE(a.subjects, ''), COALESCE(a.genres, ''),
 			(SELECT count(*) FROM tracks t
 			 INNER JOIN track_embeddings e ON t.id = e.track_id
 			 WHERE t.album_id = a.ia_identifier AND t.status = 'completed' AND (t.tags IS NULL OR t.tags = ''))
 		FROM albums a
+		INNER JOIN untagged_albums ua ON ua.album_id = a.ia_identifier
 		WHERE (a.status = 'resolved' OR a.status = 'unavailable')
-		  AND EXISTS (
-			SELECT 1 FROM tracks t
-			INNER JOIN track_embeddings e ON t.id = e.track_id
-			WHERE t.album_id = a.ia_identifier AND t.status = 'completed' AND (t.tags IS NULL OR t.tags = '')
-		  )
 		ORDER BY a.created_at DESC
 		LIMIT 1
 	`).Scan(&album.IAIdentifier, &album.Title, &album.Creator, &album.Subjects, &album.Genres, &album.TrackCount)
