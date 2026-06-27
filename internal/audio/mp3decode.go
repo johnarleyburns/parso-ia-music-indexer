@@ -75,7 +75,7 @@ func isRecoverableMPEGError(err error) bool {
 	return false
 }
 
-func decodeMP3FromData(data []byte) (samples []float64, sampleRate int, err error) {
+func decodeMP3FromData(data []byte, maxDurationSec float64) (samples []float64, sampleRate int, err error) {
 	reader := bytes.NewReader(data)
 	decoder, decErr := mp3.NewDecoder(reader)
 	if decErr != nil {
@@ -87,8 +87,16 @@ func decodeMP3FromData(data []byte) (samples []float64, sampleRate int, err erro
 	estimatedSamples := len(data) * 5
 	samples = make([]float64, 0, estimatedSamples)
 
+	maxIters := int(maxDurationSec*float64(sampleRate)*2/2048) + 1
+	iterCount := 0
+
 	buf := make([]byte, 4096)
 	for {
+		if iterCount >= maxIters {
+			return nil, 0, fmt.Errorf("mp3 decode exceeded duration ceiling: %d iterations (max %.0fs)", iterCount, maxDurationSec)
+		}
+		iterCount++
+
 		n, readErr := decoder.Read(buf)
 		if n > 0 {
 			for i := 0; i < n; i += 2 {
@@ -116,7 +124,7 @@ func decodeMP3FromData(data []byte) (samples []float64, sampleRate int, err erro
 
 const maxFrameSyncAttempts = 3
 
-func DecodeMP3(data []byte) (samples []float64, sampleRate int, err error) {
+func DecodeMP3(data []byte, metadataDurationSec float64) (samples []float64, sampleRate int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			samples = nil
@@ -129,9 +137,14 @@ func DecodeMP3(data []byte) (samples []float64, sampleRate int, err error) {
 		return nil, 0, fmt.Errorf("mp3 data too short (%d bytes)", len(data))
 	}
 
+	ceilingSec := metadataDurationSec
+	if ceilingSec > 10800 {
+		ceilingSec = 10800
+	}
+
 	offsets := findAllFrameSyncOffsets(data, maxFrameSyncAttempts+1)
 	if len(offsets) == 0 {
-		samples, sampleRate, err = decodeMP3FromData(data)
+		samples, sampleRate, err = decodeMP3FromData(data, ceilingSec)
 		if err != nil {
 			return nil, 0, fmt.Errorf("mp3 init: %w", err)
 		}
@@ -144,7 +157,7 @@ func DecodeMP3(data []byte) (samples []float64, sampleRate int, err error) {
 		if len(trimmed) < 4 {
 			continue
 		}
-		samples, sampleRate, err = decodeMP3FromData(trimmed)
+		samples, sampleRate, err = decodeMP3FromData(trimmed, ceilingSec)
 		if err == nil {
 			return samples, sampleRate, nil
 		}

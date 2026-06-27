@@ -1289,7 +1289,7 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	}
 
 	decodeStart := time.Now()
-	pcmSamples, sampleRate, err := audio.DecodeMP3(mp3Data)
+	pcmSamples, sampleRate, err := audio.DecodeMP3(mp3Data, track.Duration)
 	metrics.RecordProcessingTime(time.Since(decodeStart))
 	if err != nil {
 		reason := fmt.Sprintf("decode: %v", err)
