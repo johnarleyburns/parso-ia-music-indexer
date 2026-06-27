@@ -723,7 +723,10 @@ func main() {
 func workerLoop(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
 	dbMu *sync.Mutex, clapClient clap.CLAPClient, iaClient *http.Client, workerID string, metrics *tui.Metrics,
 	iaLimiter *ratelimit.Limiter, bwLimiter *rate.Limiter) {
-	batchSize := 2
+	// Claiming requires a full scan+sort of all pending tracks (ordered by
+	// collection recency), so claim a sizeable batch to amortize that cost
+	// rather than re-running it for every couple of tracks.
+	batchSize := 25
 	consecutiveFailures := 0
 
 	for {

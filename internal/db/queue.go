@@ -559,7 +559,13 @@ func ClaimNextTrackBatch(db *sql.DB, workerID string, batchSize int) ([]ClaimedT
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	rows, err := tx.Query(
-		`SELECT t.id, t.album_id, t.filename, t.title, t.download_url,
+		`WITH album_recency AS (
+		     SELECT ca.album_id AS album_id, MAX(c.created_at) AS rec
+		     FROM collection_albums ca
+		     JOIN collections c ON ca.collection_id = c.collection_id
+		     GROUP BY ca.album_id
+		 )
+		 SELECT t.id, t.album_id, t.filename, t.title, t.download_url,
 		        COALESCE(a.title, a.ia_identifier),
 		        COALESCE((SELECT c.title FROM collection_albums ca
 		                  JOIN collections c ON ca.collection_id = c.collection_id
@@ -569,12 +575,9 @@ func ClaimNextTrackBatch(db *sql.DB, workerID string, batchSize int) ([]ClaimedT
 		        COALESCE(a.listenability_score, 0)
 		 FROM tracks t
 		 INNER JOIN albums a ON t.album_id = a.ia_identifier
+		 LEFT JOIN album_recency ar ON ar.album_id = t.album_id
 		 WHERE t.status = 'pending'
-		 ORDER BY (
-		     SELECT MAX(c.created_at) FROM collection_albums ca
-		     JOIN collections c ON ca.collection_id = c.collection_id
-		     WHERE ca.album_id = t.album_id
-		 ) DESC, t.id ASC
+		 ORDER BY ar.rec DESC, t.id ASC
 		 LIMIT ?`,
 		batchSize,
 	)
