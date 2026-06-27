@@ -3,8 +3,10 @@ package audio
 import (
 	"encoding/binary"
 	"math"
+	"math/rand"
 	"os"
 	"testing"
+	"time"
 )
 
 func writeWav(path string, samples []float64, sampleRate, bitsPerSample, numChannels int) error {
@@ -386,5 +388,36 @@ func TestQualityScoreTier(t *testing.T) {
 	q = QualityScore{Composite: 0.1}
 	if q.Tier() != "unusable" {
 		t.Errorf("expected unusable, got %s", q.Tier())
+	}
+}
+
+func TestDecodeMP3NoHang(t *testing.T) {
+	inputs := [][]byte{
+		nil,
+		{},
+		{0xFF},
+		{0xFF, 0xFB},
+		{0xFF, 0xFB, 0x90, 0x00},
+		make([]byte, 10000),
+	}
+	rng := rand.New(rand.NewSource(0))
+	for i := 0; i < 50; i++ {
+		size := rng.Intn(50000) + 1
+		data := make([]byte, size)
+		rng.Read(data)
+		inputs = append(inputs, data)
+	}
+
+	for _, data := range inputs {
+		done := make(chan struct{})
+		go func(d []byte) {
+			defer close(done)
+			DecodeMP3(d, 1800)
+		}(data)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("DecodeMP3 hung on %d-byte input", len(data))
+		}
 	}
 }

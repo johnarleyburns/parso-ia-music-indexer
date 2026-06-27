@@ -22,6 +22,8 @@ const (
 	weightCrest    = 0.20
 
 	snrKillThreshold = 10.0
+
+	maxQualityDurationSec = 30
 )
 
 // QualityChroma holds SNR, spectral centroid, and chroma features computed
@@ -39,6 +41,11 @@ type QualityChroma struct {
 func ComputeQualityAndChroma(samples []float64, sampleRate int) QualityChroma {
 	result := QualityChroma{
 		Chroma: make([]float32, 12),
+	}
+
+	maxSamples := maxQualityDurationSec * sampleRate
+	if len(samples) > maxSamples {
+		samples = samples[:maxSamples]
 	}
 
 	numFrames := len(samples) / frameSize
