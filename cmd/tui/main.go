@@ -940,6 +940,7 @@ func listenabilityCleanerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, sto
 
 	batchSize := 10
 	version := listenability.Version
+	cursorID := 0
 
 	var pendingScored int
 	var lastCleanerEmit time.Time
@@ -1006,7 +1007,7 @@ func listenabilityCleanerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, sto
 		}
 
 		dbMu.Lock()
-		claims, err := db.ClaimListenabilityCleanupBatch(sqlDB.Conn, workerID, version, batchSize)
+		claims, err := db.ClaimListenabilityCleanupBatch(sqlDB.Conn, workerID, version, batchSize, cursorID)
 		dbMu.Unlock()
 		if err != nil {
 			events <- tui.ActivityEvent{
@@ -1021,10 +1022,13 @@ func listenabilityCleanerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, sto
 		}
 
 		if len(claims) == 0 {
+			cursorID = 0
 			flushCleanerProgress()
 			sleepOrStop(15*time.Second, stopCh)
 			continue
 		}
+
+		cursorID = claims[len(claims)-1].TrackID
 
 		scoredCount := 0
 		for _, claim := range claims {

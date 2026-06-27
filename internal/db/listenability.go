@@ -156,7 +156,13 @@ func GetAlbumListenabilityEvidence(db *sql.DB, albumID string) (listenability.Al
 	return e, nil
 }
 
-func ClaimListenabilityCleanupBatch(db *sql.DB, workerID string, version string, batchSize int) ([]ListenabilityCleanupClaim, error) {
+// ClaimListenabilityCleanupBatch claims up to batchSize completed tracks that
+// still need (re)scoring for the given version. minID is a forward cursor
+// (claim only tracks with id > minID); callers advance it past the last claimed
+// id and reset it to 0 once a pass returns no rows. Without the cursor, every
+// claim re-scans the already-processed prefix of completed tracks, which is
+// O(N^2) over a large backlog and stalls all workers holding the shared DB lock.
+func ClaimListenabilityCleanupBatch(db *sql.DB, workerID string, version string, batchSize int, minID int) ([]ListenabilityCleanupClaim, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	tx, err := db.Begin()
@@ -176,11 +182,12 @@ func ClaimListenabilityCleanupBatch(db *sql.DB, workerID string, version string,
 		INNER JOIN albums a ON t.album_id = a.ia_identifier
 		LEFT JOIN track_embeddings e ON t.id = e.track_id
 		WHERE t.status = 'completed'
+		  AND t.id > ?
 		  AND (t.listenability_version IS NULL OR t.listenability_version != ?)
 		  AND (t.listenability_locked_at IS NULL)
 		ORDER BY t.id ASC
 		LIMIT ?`,
-		version, batchSize,
+		minID, version, batchSize,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query cleanup batch: %w", err)
