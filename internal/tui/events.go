@@ -43,6 +43,45 @@ type ActivityEvent struct {
 	TrackCount   int       `json:"track_count,omitempty"`
 }
 
+// eventChannelBuffer sizes both the producer channel and the decoupled display
+// channel. With non-blocking emission, this bounds how many events survive a
+// burst before drops begin.
+const eventChannelBuffer = 256
+
 func NewEventChannel() chan ActivityEvent {
-	return make(chan ActivityEvent, 100)
+	return make(chan ActivityEvent, eventChannelBuffer)
+}
+
+// Emit sends ev on ch without ever blocking. If the buffer is full the event is
+// dropped (drop-newest). This guarantees producer goroutines (analyzers,
+// resolvers, cleaners, the coordinator) are never stalled by a slow consumer
+// such as the TUI render loop.
+//
+// Producer-side "drop-oldest" is intentionally avoided: receiving from a shared
+// multi-producer channel to evict the oldest event would race with the single
+// consumer and could steal legitimate events.
+func Emit(ch chan<- ActivityEvent, ev ActivityEvent) {
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+// StartEventDecoupler forwards events from the producer channel to a separate
+// display channel, dropping newest events only when the display channel is
+// full. The forwarder's receive on in is the only consumer of the producer
+// channel, so producers effectively never block: the forwarder drains in
+// continuously and never blocks on out.
+//
+// This decouples the producer rate from the consumer (render) rate, which is
+// what keeps analysis progressing even when the TUI is busy rendering.
+func StartEventDecoupler(in <-chan ActivityEvent) chan ActivityEvent {
+	out := make(chan ActivityEvent, eventChannelBuffer)
+	go func() {
+		for ev := range in {
+			Emit(out, ev)
+		}
+		close(out)
+	}()
+	return out
 }

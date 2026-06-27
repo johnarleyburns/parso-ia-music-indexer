@@ -234,6 +234,27 @@ func ReleaseListenabilityCleanupClaim(db *sql.DB, trackID int) error {
 	return err
 }
 
+// RecoverStaleListenabilityLocks clears listenability cleanup locks whose
+// listenability_locked_at is older than olderThan. Locks leak when a process is
+// killed mid-batch (the lock is only cleared on successful update), which
+// permanently excludes those rows from ClaimListenabilityCleanupBatch. Call this
+// at startup to reclaim them. Returns the number of rows recovered.
+func RecoverStaleListenabilityLocks(db *sql.DB, olderThan time.Duration) (int64, error) {
+	cutoff := time.Now().UTC().Add(-olderThan).Format(time.RFC3339)
+	res, err := db.Exec(
+		`UPDATE tracks
+		 SET listenability_locked_at = NULL, listenability_worker_id = NULL
+		 WHERE listenability_locked_at IS NOT NULL
+		   AND listenability_locked_at < ?`,
+		cutoff,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("recover stale listenability locks: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 func GetTrackEmbeddingForCleanup(db *sql.DB, trackID int) ([]byte, float64, error) {
 	var clapBlob []byte
 	var qualityScore float64

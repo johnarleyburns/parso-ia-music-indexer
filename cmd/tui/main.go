@@ -938,6 +938,23 @@ func listenabilityCleanerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, sto
 	batchSize := 10
 	version := listenability.Version
 
+	var pendingScored int
+	var lastCleanerEmit time.Time
+	flushCleanerProgress := func() {
+		if pendingScored <= 0 {
+			return
+		}
+		tui.Emit(events, tui.ActivityEvent{
+			Type:      tui.EventCleanerBatch,
+			Timestamp: time.Now(),
+			WorkerID:  workerID,
+			Message:   fmt.Sprintf("[%s] Scored %d tracks (listenability)", workerID, pendingScored),
+			Count:     pendingScored,
+		})
+		pendingScored = 0
+		lastCleanerEmit = time.Now()
+	}
+
 	var promptCache map[string][]float32
 
 	getCachedPromptVec := func(ctx context.Context, text string) ([]float32, error) {
@@ -1001,6 +1018,7 @@ func listenabilityCleanerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, sto
 		}
 
 		if len(claims) == 0 {
+			flushCleanerProgress()
 			sleepOrStop(15*time.Second, stopCh)
 			continue
 		}
@@ -1071,12 +1089,9 @@ func listenabilityCleanerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, sto
 		}
 
 		if scoredCount > 0 {
-			events <- tui.ActivityEvent{
-				Type:      tui.EventCleanerBatch,
-				Timestamp: time.Now(),
-				WorkerID:  workerID,
-				Message:   fmt.Sprintf("[%s] Scored %d tracks (listenability)", workerID, scoredCount),
-				Count:     scoredCount,
+			pendingScored += scoredCount
+			if time.Since(lastCleanerEmit) >= time.Second {
+				flushCleanerProgress()
 			}
 		}
 	}
@@ -1354,7 +1369,7 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	pcmBytes := clap.Float32ToBytes(clapSamples)
 	metrics.RecordProcessingTime(time.Since(featureStart))
 
-	clapCtx, clapCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	clapCtx, clapCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	clapStart := time.Now()
 	clapVec, err := clapClient.GetEmbedding(clapCtx, pcmBytes, int32(sampleRate))
 	metrics.RecordCLAPTime(time.Since(clapStart))
@@ -1681,6 +1696,12 @@ func runTUI(cfg *config.Config) {
 		log.Printf("[migration] v1→v2: reset %d completed + %d unavailable tracks for re-scoring", compReset, unavReset)
 	}
 
+	if recovered, rerr := db.RecoverStaleListenabilityLocks(sqlDB.Conn, 10*time.Minute); rerr != nil {
+		log.Printf("[migration] stale listenability lock recovery error: %v", rerr)
+	} else if recovered > 0 {
+		log.Printf("[migration] recovered %d stale listenability cleanup locks", recovered)
+	}
+
 	logDir := filepath.Dir(cfg.DBPath)
 	sidecarProc, clapClient, err := clap.EnsureSidecar(cfg.ClapHost, cfg.ClapPort, cfg.ClapSidecarDir, logDir, func(msg string) {
 		log.Printf("[sidecar] %s", msg)
@@ -1697,10 +1718,11 @@ func runTUI(cfg *config.Config) {
 	metrics := tui.NewMetrics()
 
 	events := tui.NewEventChannel()
+	display := tui.StartEventDecoupler(events)
 	controls := tui.NewControlChannel()
 	safeGo(func() { runCoordinator(cfg, sqlDB, events, controls, metrics, clapClient) }, events, "runCoordinator")
 
-	m := tui.NewMainModel(cfg, sqlDB.Conn, events, controls, metrics, cfg.DBPath)
+	m := tui.NewMainModel(cfg, sqlDB.Conn, display, controls, metrics, cfg.DBPath)
 	p := tea.NewProgram(m)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -1776,6 +1798,12 @@ func runHeadless(cfg *config.Config) {
 		log.Printf("[migration] v1→v2 migration error: %v", err)
 	} else if compReset > 0 || unavReset > 0 {
 		log.Printf("[migration] v1→v2: reset %d completed + %d unavailable tracks for re-scoring", compReset, unavReset)
+	}
+
+	if recovered, rerr := db.RecoverStaleListenabilityLocks(sqlDB.Conn, 10*time.Minute); rerr != nil {
+		log.Printf("[migration] stale listenability lock recovery error: %v", rerr)
+	} else if recovered > 0 {
+		log.Printf("[migration] recovered %d stale listenability cleanup locks", recovered)
 	}
 
 	logDir := filepath.Dir(cfg.DBPath)

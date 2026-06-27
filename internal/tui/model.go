@@ -110,19 +110,43 @@ func NewMainModel(cfg *config.Config, sqlDB *sql.DB, events chan ActivityEvent, 
 func (m MainModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.Dashboard.Init(),
-		waitForActivityEvent(m.Events),
+		drainActivityEvents(m.Events),
 		m.resourceTick(),
 		m.collectionsTick(),
 	)
 }
 
-func waitForActivityEvent(ch <-chan ActivityEvent) tea.Cmd {
+// eventBatchMax caps how many events one drain coalesces into a single render.
+const eventBatchMax = 512
+
+// eventBatchMsg delivers a coalesced batch of activity events so the model
+// updates and renders once per burst instead of once per event. This decouples
+// the render rate from the event rate and prevents the render storm.
+type eventBatchMsg struct {
+	Events []ActivityEvent
+}
+
+// drainActivityEvents blocks for the first event, then non-blocking-drains all
+// currently-queued events into a single eventBatchMsg.
+func drainActivityEvents(ch <-chan ActivityEvent) tea.Cmd {
 	return func() tea.Msg {
-		event, ok := <-ch
+		first, ok := <-ch
 		if !ok {
 			return nil
 		}
-		return event
+		batch := []ActivityEvent{first}
+		for len(batch) < eventBatchMax {
+			select {
+			case ev, ok := <-ch:
+				if !ok {
+					return eventBatchMsg{Events: batch}
+				}
+				batch = append(batch, ev)
+			default:
+				return eventBatchMsg{Events: batch}
+			}
+		}
+		return eventBatchMsg{Events: batch}
 	}
 }
 
@@ -282,11 +306,12 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Browse, cmd = m.Browse.Update(msg)
 		return m, cmd
 
-	case ActivityEvent:
-		var cmd1, cmd2 tea.Cmd
-		m.Dashboard, cmd1 = m.Dashboard.Update(msg)
-		m.LiveLog, cmd2 = m.LiveLog.Update(msg)
-		return m, tea.Batch(waitForActivityEvent(m.Events), cmd1, cmd2)
+	case eventBatchMsg:
+		for _, ev := range msg.Events {
+			m.Dashboard, _ = m.Dashboard.Update(ev)
+			m.LiveLog, _ = m.LiveLog.Update(ev)
+		}
+		return m, drainActivityEvents(m.Events)
 
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
