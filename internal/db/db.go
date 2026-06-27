@@ -3,7 +3,9 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -11,27 +13,63 @@ import (
 type DB struct {
 	Conn *sql.DB
 	Path string
+
+	stopCheckpoint chan struct{}
 }
 
 func Open(path string) (*DB, error) {
-	conn, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000")
+	conn, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000&_wal_autocheckpoint=1000")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
 	conn.SetMaxOpenConns(8)
 
-	db := &DB{Conn: conn, Path: path}
+	db := &DB{Conn: conn, Path: path, stopCheckpoint: make(chan struct{})}
 	if err := db.migrate(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
+	db.checkpointWAL()
+	db.startCheckpointer()
+
 	return db, nil
 }
 
 func (db *DB) Close() error {
+	if db.stopCheckpoint != nil {
+		close(db.stopCheckpoint)
+		db.stopCheckpoint = nil
+	}
 	return db.Conn.Close()
+}
+
+// checkpointWAL forces a truncating WAL checkpoint. SQLite's passive
+// auto-checkpoint silently no-ops whenever a reader is active, which under
+// continuous read/write load lets the WAL grow without bound. An oversized WAL
+// makes every page read do a linear walFindFrame scan, which pegs CPU and
+// stalls writers. Forcing TRUNCATE periodically keeps the WAL bounded.
+func (db *DB) checkpointWAL() {
+	if _, err := db.Conn.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		log.Printf("[db] wal_checkpoint failed: %v", err)
+	}
+}
+
+func (db *DB) startCheckpointer() {
+	stop := db.stopCheckpoint
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				db.checkpointWAL()
+			}
+		}
+	}()
 }
 
 func (db *DB) migrate() error {
