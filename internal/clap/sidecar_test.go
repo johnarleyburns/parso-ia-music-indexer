@@ -49,6 +49,12 @@ func TestEnsureSidecarNoPython(t *testing.T) {
 
 func TestEnsureSidecarStatusCallback(t *testing.T) {
 	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "server.py"), []byte("pass"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if findPython(tmpDir) == "" {
+		t.Skip("no python interpreter available")
+	}
 	var messages []string
 	_, _, _ = EnsureSidecar("127.0.0.1", 59998, tmpDir, tmpDir, func(msg string) {
 		messages = append(messages, msg)
@@ -56,7 +62,7 @@ func TestEnsureSidecarStatusCallback(t *testing.T) {
 	if len(messages) == 0 {
 		t.Fatal("expected at least one status message")
 	}
-	if !strings.Contains(messages[0], "Checking CLAP sidecar") {
-		t.Fatalf("expected checking message, got: %s", messages[0])
+	if !strings.Contains(messages[0], "Starting CLAP sidecar") {
+		t.Fatalf("expected starting message, got: %s", messages[0])
 	}
 }

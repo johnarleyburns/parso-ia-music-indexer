@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -15,6 +17,52 @@ type SidecarProcess struct {
 	cmd     *exec.Cmd
 	logFile *os.File
 	exited  chan error
+}
+
+func killExistingSidecar(port int) {
+	addr := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", port))
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return
+	}
+	conn.Close()
+
+	var pid int
+	if runtime.GOOS == "windows" {
+		out, err := exec.Command("netstat", "-ano").Output()
+		if err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				if strings.Contains(line, fmt.Sprintf(":%d", port)) && strings.Contains(line, "LISTENING") {
+					fields := strings.Fields(line)
+					if len(fields) > 0 {
+						pid, _ = strconv.Atoi(fields[len(fields)-1])
+					}
+				}
+			}
+		}
+	} else {
+		out, err := exec.Command("lsof", "-ti", fmt.Sprintf(":%d", port)).Output()
+		if err == nil {
+			pid, _ = strconv.Atoi(strings.TrimSpace(string(out)))
+		}
+	}
+
+	if pid > 1 {
+		p, err := os.FindProcess(pid)
+		if err == nil {
+			p.Signal(syscall.SIGTERM)
+			deadline := time.Now().Add(10 * time.Second)
+			for time.Now().Before(deadline) {
+				conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+				if err != nil {
+					return
+				}
+				conn.Close()
+				time.Sleep(500 * time.Millisecond)
+			}
+			p.Kill()
+		}
+	}
 }
 
 func EnsureSidecar(host string, port int, sidecarDir, logDir string, statusFn func(string)) (*SidecarProcess, CLAPClient, error) {
@@ -28,12 +76,14 @@ func EnsureSidecar(host string, port int, sidecarDir, logDir string, statusFn fu
 		return nil, nil, fmt.Errorf("resolve log dir: %w", err)
 	}
 
-	statusFn(fmt.Sprintf("Checking CLAP sidecar on %s:%d...", host, port))
-
 	client, err := NewGRPCClient(host, port)
 	if err == nil {
-		statusFn("CLAP sidecar already running")
-		return nil, client, nil
+		statusFn("Existing CLAP sidecar found, shutting it down to start fresh...")
+		client.Close()
+		killExistingSidecar(port)
+		time.Sleep(2 * time.Second)
+	} else {
+		killExistingSidecar(port)
 	}
 
 	serverScript := filepath.Join(sidecarDir, "server.py")

@@ -1205,6 +1205,9 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 		return true
 	}
 
+	log.Printf("[%s] DOWNLOADING track %d %q: precheck passed (score=%.3f tier=%s), fetching audio...",
+		workerID, track.ID, trackName, precheckResult.Score, precheckResult.Tier)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	if err := iaLimiter.Wait(ctx); err != nil {
 		cancel()
@@ -1292,6 +1295,7 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	pcmSamples, sampleRate, err := audio.DecodeMP3(mp3Data, track.Duration)
 	metrics.RecordProcessingTime(time.Since(decodeStart))
 	if err != nil {
+		log.Printf("[%s] DECODE FAILED track %d %q: %v", workerID, track.ID, trackName, err)
 		reason := fmt.Sprintf("decode: %v", err)
 		dbMu.Lock()
 		db.MarkTrackUnavailable(sqlDB.Conn, track.ID, reason)
@@ -1312,6 +1316,9 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	crestFactor := audio.CalculateCrestFactor(pcmSamples)
 	compositeScore := audio.CalculateCompositeScore(qc.SNR, qc.CentroidHz, crestFactor)
 	metrics.RecordProcessingTime(time.Since(qualityStart))
+
+	log.Printf("[%s] QUALITY track %d %q: score=%.3f snr=%.1f centroid=%.0f crest=%.1f sr=%d samples=%d",
+		workerID, track.ID, trackName, compositeScore, qc.SNR, qc.CentroidHz, crestFactor, sampleRate, len(pcmSamples))
 
 	if compositeScore < audio.QualityUnusable {
 		dbMu.Lock()
@@ -1347,12 +1354,13 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	pcmBytes := clap.Float32ToBytes(clapSamples)
 	metrics.RecordProcessingTime(time.Since(featureStart))
 
-	clapCtx, clapCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	clapCtx, clapCancel := context.WithTimeout(context.Background(), 120*time.Second)
 	clapStart := time.Now()
 	clapVec, err := clapClient.GetEmbedding(clapCtx, pcmBytes, int32(sampleRate))
 	metrics.RecordCLAPTime(time.Since(clapStart))
 	clapCancel()
 	if err != nil {
+		log.Printf("[%s] CLAP FAILED track %d %q: %v (elapsed=%v)", workerID, track.ID, trackName, err, time.Since(clapStart))
 		errMsg := fmt.Sprintf("clap: %v", err)
 		dbMu.Lock()
 		requeued, _ := db.RequeueTrackForRetry(sqlDB.Conn, track.ID, 3, errMsg)
@@ -1408,6 +1416,9 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	_ = db.UpdateTrackListenability(sqlDB.Conn, track.ID, metaResult, workerID)
 	db.MarkTrackCompleted(sqlDB.Conn, track.ID)
 	dbMu.Unlock()
+
+	log.Printf("[%s] COMPLETE track %d %q: quality=%.2f listenability=%.3f/%s/%s",
+		workerID, track.ID, trackName, compositeScore, metaResult.Score, metaResult.Tier, metaResult.Decision)
 
 	events <- tui.ActivityEvent{
 		Type:         tui.EventAnalysisComplete,
