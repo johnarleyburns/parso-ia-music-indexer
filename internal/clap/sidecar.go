@@ -27,7 +27,8 @@ func killExistingSidecar(port int) {
 	}
 	conn.Close()
 
-	var pid int
+	self := os.Getpid()
+	var pids []int
 	if runtime.GOOS == "windows" {
 		out, err := exec.Command("netstat", "-ano").Output()
 		if err == nil {
@@ -35,31 +36,52 @@ func killExistingSidecar(port int) {
 				if strings.Contains(line, fmt.Sprintf(":%d", port)) && strings.Contains(line, "LISTENING") {
 					fields := strings.Fields(line)
 					if len(fields) > 0 {
-						pid, _ = strconv.Atoi(fields[len(fields)-1])
+						if p, e := strconv.Atoi(fields[len(fields)-1]); e == nil {
+							pids = append(pids, p)
+						}
 					}
 				}
 			}
 		}
 	} else {
-		out, err := exec.Command("lsof", "-ti", fmt.Sprintf(":%d", port)).Output()
+		// lsof may return multiple PIDs (one per line) — e.g. the server plus
+		// any connected gRPC clients (including this process). Parse each line.
+		out, err := exec.Command("lsof", "-ti", fmt.Sprintf("tcp:%d", port)).Output()
 		if err == nil {
-			pid, _ = strconv.Atoi(strings.TrimSpace(string(out)))
+			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				if p, e := strconv.Atoi(strings.TrimSpace(line)); e == nil {
+					pids = append(pids, p)
+				}
+			}
 		}
 	}
 
-	if pid > 1 {
-		p, err := os.FindProcess(pid)
-		if err == nil {
+	killable := func(pid int) bool { return pid > 1 && pid != self }
+
+	for _, pid := range pids {
+		if !killable(pid) {
+			continue
+		}
+		if p, err := os.FindProcess(pid); err == nil {
 			p.Signal(syscall.SIGTERM)
-			deadline := time.Now().Add(10 * time.Second)
-			for time.Now().Before(deadline) {
-				conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
-				if err != nil {
-					return
-				}
-				conn.Close()
-				time.Sleep(500 * time.Millisecond)
-			}
+		}
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err != nil {
+			return
+		}
+		conn.Close()
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	for _, pid := range pids {
+		if !killable(pid) {
+			continue
+		}
+		if p, err := os.FindProcess(pid); err == nil {
 			p.Kill()
 		}
 	}
@@ -78,13 +100,13 @@ func EnsureSidecar(host string, port int, sidecarDir, logDir string, statusFn fu
 
 	client, err := NewGRPCClient(host, port)
 	if err == nil {
-		statusFn("Existing CLAP sidecar found, shutting it down to start fresh...")
-		client.Close()
-		killExistingSidecar(port)
-		time.Sleep(2 * time.Second)
-	} else {
-		killExistingSidecar(port)
+		statusFn("CLAP sidecar already running, reusing it")
+		return nil, client, nil
 	}
+
+	// No healthy sidecar responded to the health probe. Clean up any stale or
+	// unresponsive process still holding the port before starting fresh.
+	killExistingSidecar(port)
 
 	serverScript := filepath.Join(sidecarDir, "server.py")
 	if _, err := os.Stat(serverScript); err != nil {
