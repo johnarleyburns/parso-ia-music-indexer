@@ -54,6 +54,7 @@ type IAItemMetadata struct {
 	MediaType            string          `json:"mediatype"`
 	Description          json.RawMessage `json:"description"`
 	Genre                json.RawMessage `json:"genre"`
+	LicenseURL           string          `json:"licenseurl"`
 }
 
 func (m *IAItemMetadata) CreatorString() string {
@@ -129,6 +130,7 @@ type AlbumMetadata struct {
 	MediaType            string
 	Description          string
 	Genres               []string
+	LicenseURL           string
 }
 
 type TrackFile struct {
@@ -190,4 +192,80 @@ func parseDuration(s string) float64 {
 		return f
 	}
 	return 0
+}
+
+func ClassifyLicense(licenseURL string) string {
+	if licenseURL == "" {
+		return "unknown"
+	}
+	lower := strings.ToLower(licenseURL)
+
+	if strings.HasPrefix(lower, "http://creativecommons.org/publicdomain/zero/") ||
+		strings.HasPrefix(lower, "https://creativecommons.org/publicdomain/zero/") ||
+		strings.HasPrefix(lower, "http://creativecommons.org/publicdomain/mark/") ||
+		strings.HasPrefix(lower, "https://creativecommons.org/publicdomain/mark/") {
+		return "pd"
+	}
+
+	if strings.HasPrefix(lower, "http://creativecommons.org/licenses/zero/") ||
+		strings.HasPrefix(lower, "https://creativecommons.org/licenses/zero/") ||
+		strings.Contains(lower, "/cc0/") ||
+		strings.HasSuffix(lower, "/cc0") {
+		return "cc0"
+	}
+
+	if strings.Contains(lower, "publicdomain") || strings.Contains(lower, "public_domain") ||
+		strings.Contains(lower, "pdmark") || strings.Contains(lower, "cc-pdm") {
+		return "pd"
+	}
+
+	if strings.HasPrefix(lower, "http://creativecommons.org/licenses/by-sa/") ||
+		strings.HasPrefix(lower, "https://creativecommons.org/licenses/by-sa/") ||
+		strings.HasPrefix(lower, "http://creativecommons.org/licenses/by-nc-sa/") ||
+		strings.HasPrefix(lower, "https://creativecommons.org/licenses/by-nc-sa/") ||
+		strings.HasPrefix(lower, "http://creativecommons.org/licenses/by-nd/") ||
+		strings.HasPrefix(lower, "https://creativecommons.org/licenses/by-nd/") ||
+		strings.HasPrefix(lower, "http://creativecommons.org/licenses/by-nc-nd/") ||
+		strings.HasPrefix(lower, "https://creativecommons.org/licenses/by-nc-nd/") ||
+		strings.HasPrefix(lower, "http://creativecommons.org/licenses/by-nc/") ||
+		strings.HasPrefix(lower, "https://creativecommons.org/licenses/by-nc/") ||
+		strings.HasPrefix(lower, "http://creativecommons.org/licenses/by/") ||
+		strings.HasPrefix(lower, "https://creativecommons.org/licenses/by/") {
+		if strings.Contains(lower, "/by-nc-nd/") {
+			return "cc-by-nc-nd"
+		}
+		if strings.Contains(lower, "/by-nc-sa/") {
+			return "cc-by-nc-sa"
+		}
+		if strings.Contains(lower, "/by-nd/") {
+			return "cc-by-nd"
+		}
+		if strings.Contains(lower, "/by-nc/") {
+			return "cc-by-nc"
+		}
+		if strings.Contains(lower, "/by-sa/") {
+			return "cc-by-sa"
+		}
+		if strings.Contains(lower, "/by/") {
+			return "cc-by"
+		}
+		return "other"
+	}
+
+	if strings.Contains(lower, "creativecommons") || strings.Contains(lower, "creative_commons") {
+		return "other"
+	}
+
+	return "other"
+}
+
+var commerciallyUsableLicenses = map[string]bool{
+	"pd":       true,
+	"cc0":      true,
+	"cc-by":    true,
+	"cc-by-sa": true,
+}
+
+func IsCommerciallyUsable(license string) bool {
+	return commerciallyUsableLicenses[license]
 }

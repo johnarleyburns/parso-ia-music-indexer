@@ -7,12 +7,13 @@ import (
 )
 
 type AlbumStats struct {
-	Total       int
-	Pending     int
-	Resolving   int
-	Resolved    int
-	Failed      int
-	Unavailable int
+	Total           int
+	Pending         int
+	Resolving       int
+	Resolved        int
+	Failed          int
+	Unavailable     int
+	UnlicensedCount int
 }
 
 type TrackStats struct {
@@ -75,17 +76,18 @@ type TrackResult struct {
 }
 
 type AlbumResult struct {
-	IAIdentifier    string
-	Title           string
-	Creator         string
-	Collection      string
-	ArtURL          string
-	TrackCount      int
-	Status          string
-	CompletedCount  int
-	Downloads       int
-	AvgQuality      float64
+	IAIdentifier     string
+	Title            string
+	Creator          string
+	Collection       string
+	ArtURL           string
+	TrackCount       int
+	Status           string
+	CompletedCount   int
+	Downloads        int
+	AvgQuality       float64
 	AvgListenability float64
+	License          string
 }
 
 type TrackDetail struct {
@@ -134,6 +136,34 @@ func ClaimUntaggedAlbum(db *sql.DB) (*UntaggedAlbum, error) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("claim untagged album: %w", err)
+	}
+	return &album, nil
+}
+
+func ClaimUnlicensedAlbum(db *sql.DB) (*UntaggedAlbum, error) {
+	var album UntaggedAlbum
+	err := db.QueryRow(`
+		WITH licensed_albums AS (
+			SELECT DISTINCT a.ia_identifier
+			FROM albums a
+			JOIN tracks t ON t.album_id = a.ia_identifier AND t.status = 'completed'
+			WHERE a.status IN ('resolved', 'unavailable')
+			  AND (a.license IS NULL OR a.license = '')
+		)
+		SELECT a.ia_identifier, a.title, a.creator,
+			COALESCE(a.subjects, ''), COALESCE(a.genres, ''),
+			(SELECT count(*) FROM tracks t
+			 WHERE t.album_id = a.ia_identifier AND t.status = 'completed')
+		FROM albums a
+		INNER JOIN licensed_albums ua ON ua.ia_identifier = a.ia_identifier
+		ORDER BY a.created_at DESC
+		LIMIT 1
+	`).Scan(&album.IAIdentifier, &album.Title, &album.Creator, &album.Subjects, &album.Genres, &album.TrackCount)
+	if err != nil {
+		if err.Error() == "sql: no rows in result set" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("claim unlicensed album: %w", err)
 	}
 	return &album, nil
 }
@@ -227,6 +257,14 @@ func GetCombinedStats(db *sql.DB) (*CombinedStats, error) {
 			WHERE t.status = 'completed'`).Scan(&s.Tracks.AvgQuality)
 		db.QueryRow(`SELECT COALESCE(AVG(t.listenability_score), 0.0) FROM tracks t
 			WHERE t.status = 'completed' AND t.listenability_score IS NOT NULL`).Scan(&s.Tracks.AvgListenability)
+	}
+
+	err = db.QueryRow(`SELECT count(*) FROM albums a
+		WHERE a.status IN ('resolved', 'unavailable')
+		AND EXISTS (SELECT 1 FROM tracks t WHERE t.album_id = a.ia_identifier AND t.status = 'completed')
+		AND (a.license IS NULL OR a.license = '')`).Scan(&s.Albums.UnlicensedCount)
+	if err != nil {
+		s.Albums.UnlicensedCount = 0
 	}
 
 	return s, nil
@@ -413,6 +451,14 @@ func UpdateAlbumMetadata(db *sql.DB, identifier, subjects, genres string) error 
 	_, err := db.Exec(
 		`UPDATE albums SET subjects=?, genres=? WHERE ia_identifier=?`,
 		subjects, genres, identifier,
+	)
+	return err
+}
+
+func UpdateAlbumLicense(db *sql.DB, identifier, license string) error {
+	_, err := db.Exec(
+		`UPDATE albums SET license=? WHERE ia_identifier=?`,
+		license, identifier,
 	)
 	return err
 }
@@ -923,9 +969,10 @@ func GetAlbumByID(sqlDB *sql.DB, albumID string) (*AlbumResult, error) {
 			COALESCE((SELECT count(*) FROM tracks t WHERE t.album_id = a.ia_identifier AND t.status = 'completed'), 0),
 			COALESCE(a.downloads, 0),
 			COALESCE((SELECT AVG(e.quality_score) FROM tracks t INNER JOIN track_embeddings e ON t.id = e.track_id WHERE t.album_id = a.ia_identifier AND t.status = 'completed'), 0.0),
-			COALESCE((SELECT AVG(t.listenability_score) FROM tracks t WHERE t.album_id = a.ia_identifier AND t.status = 'completed' AND t.listenability_score IS NOT NULL), 0.0)
+			COALESCE((SELECT AVG(t.listenability_score) FROM tracks t WHERE t.album_id = a.ia_identifier AND t.status = 'completed' AND t.listenability_score IS NOT NULL), 0.0),
+			COALESCE(a.license, '')
 		FROM albums a WHERE a.ia_identifier = ?`, albumID).
-		Scan(&r.IAIdentifier, &r.Title, &r.Creator, &r.Collection, &r.ArtURL, &r.TrackCount, &r.Status, &r.CompletedCount, &r.Downloads, &r.AvgQuality, &r.AvgListenability)
+		Scan(&r.IAIdentifier, &r.Title, &r.Creator, &r.Collection, &r.ArtURL, &r.TrackCount, &r.Status, &r.CompletedCount, &r.Downloads, &r.AvgQuality, &r.AvgListenability, &r.License)
 	if err != nil {
 		return nil, err
 	}

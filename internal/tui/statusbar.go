@@ -105,6 +105,7 @@ func RenderStatusBar(metrics *Metrics, stats *db.CombinedStats, rs ResourceStats
 	resolverRate := metrics.ResolverRate()
 	analyzerRate := metrics.AnalyzerRate()
 	enhancerRate := metrics.EnhancerRate()
+	licenseRate := metrics.LicenseRate()
 
 	var resolverETA string
 	if resolverRate > 0 && stats.Albums.Pending > 0 {
@@ -136,6 +137,16 @@ func RenderStatusBar(metrics *Metrics, stats *db.CombinedStats, rs ResourceStats
 		enhancerETA = "\u2014"
 	}
 
+	var licenseETA string
+	if licenseRate > 0 && stats.Albums.UnlicensedCount > 0 {
+		secs := float64(stats.Albums.UnlicensedCount) / licenseRate
+		licenseETA = formatETA(time.Duration(secs) * time.Second)
+	} else if stats.Albums.UnlicensedCount == 0 {
+		licenseETA = "done"
+	} else {
+		licenseETA = "\u2014"
+	}
+
 	bwVal := pctColor(bwPct).Render(fmt.Sprintf("%.1f KB/s (%.0f%%)", bwKBs, bwPct))
 	apiVal := pctColor(apiPct).Render(fmt.Sprintf("%.2f req/s (%.0f%%)", apiRate, apiPct))
 
@@ -145,6 +156,7 @@ func RenderStatusBar(metrics *Metrics, stats *db.CombinedStats, rs ResourceStats
 		labelStyle.Render("Resolvers:") + " " + valStyle.Render(resolverETA),
 		labelStyle.Render("Analyzers:") + " " + valStyle.Render(analyzerETA),
 		labelStyle.Render("Enhancers:") + " " + valStyle.Render(enhancerETA),
+		labelStyle.Render("License:") + " " + valStyle.Render(licenseETA),
 	}
 
 	line2Parts := []string{

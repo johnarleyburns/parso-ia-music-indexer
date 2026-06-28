@@ -119,6 +119,7 @@ func (db *DB) migrate() error {
 			prechecked    INTEGER NOT NULL DEFAULT 0,
 			subjects      TEXT,
 			genres        TEXT,
+			license       TEXT,
 			listenability_score     REAL,
 			listenability_tier      TEXT,
 			listenability_decision  TEXT,
@@ -259,6 +260,12 @@ func (db *DB) migrateSchemaChanges() error {
 	if tableExists(db.Conn, "albums") && !columnExists(db.Conn, "albums", "genres") {
 		if _, err := db.Conn.Exec("ALTER TABLE albums ADD COLUMN genres TEXT"); err != nil {
 			return fmt.Errorf("add genres column: %w", err)
+		}
+	}
+
+	if tableExists(db.Conn, "albums") && !columnExists(db.Conn, "albums", "license") {
+		if _, err := db.Conn.Exec("ALTER TABLE albums ADD COLUMN license TEXT"); err != nil {
+			return fmt.Errorf("add license column: %w", err)
 		}
 	}
 
@@ -428,6 +435,7 @@ func recreateAlbumsWithUnavailable(sqlDB *sql.DB) error {
 			prechecked    INTEGER NOT NULL DEFAULT 0,
 			subjects      TEXT,
 			genres        TEXT,
+			license       TEXT,
 			listenability_score     REAL,
 			listenability_tier      TEXT,
 			listenability_decision  TEXT,
@@ -442,8 +450,8 @@ func recreateAlbumsWithUnavailable(sqlDB *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("create albums_new: %w", err)
 	}
-	_, err = sqlDB.Exec(`INSERT INTO albums_new(ia_identifier, title, creator, collection, art_url, track_count, status, error_message, downloads, retry_count, prechecked, subjects, genres, listenability_score, listenability_tier, listenability_decision, listenability_stream, listenability_reasons, listenability_components, listenability_version, listenability_checked_at, created_at, updated_at)
-		SELECT ia_identifier, title, creator, collection, art_url, track_count, status, error_message, downloads, retry_count, prechecked, subjects, genres, listenability_score, listenability_tier, listenability_decision, listenability_stream, listenability_reasons, listenability_components, listenability_version, listenability_checked_at, created_at, updated_at FROM albums`)
+	_, err = sqlDB.Exec(`INSERT INTO albums_new(ia_identifier, title, creator, collection, art_url, track_count, status, error_message, downloads, retry_count, prechecked, subjects, genres, license, listenability_score, listenability_tier, listenability_decision, listenability_stream, listenability_reasons, listenability_components, listenability_version, listenability_checked_at, created_at, updated_at)
+		SELECT ia_identifier, title, creator, collection, art_url, track_count, status, error_message, downloads, retry_count, prechecked, subjects, genres, license, listenability_score, listenability_tier, listenability_decision, listenability_stream, listenability_reasons, listenability_components, listenability_version, listenability_checked_at, created_at, updated_at FROM albums`)
 	if err != nil {
 		return fmt.Errorf("copy albums: %w", err)
 	}

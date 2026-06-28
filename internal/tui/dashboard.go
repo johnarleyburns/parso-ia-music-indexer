@@ -51,6 +51,9 @@ type DashboardModel struct {
 	CleanerCount  int
 	CleanerStates map[string]*workerState
 
+	LicenseCount  int
+	LicenseStates map[string]*workerState
+
 	Events []ActivityEvent
 }
 
@@ -68,6 +71,8 @@ func NewDashboardModel(sqlDB *sql.DB) DashboardModel {
 		EnhancerStates:  make(map[string]*workerState),
 		CleanerCount:    0,
 		CleanerStates:   make(map[string]*workerState),
+		LicenseCount:    0,
+		LicenseStates:   make(map[string]*workerState),
 		Events:          make([]ActivityEvent, 0),
 	}
 }
@@ -86,6 +91,10 @@ func isEnhancer(id string) bool {
 
 func isCleaner(id string) bool {
 	return strings.HasPrefix(id, "cleaner-")
+}
+
+func isLicense(id string) bool {
+	return strings.HasPrefix(id, "license-")
 }
 
 func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
@@ -126,64 +135,76 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 			m.CoordCurrentCollection = ""
 		case EventCollectionFailed:
 			m.CoordCurrentCollection = ""
-	case EventWorkerStarted:
-		if msg.WorkerID != "" {
-			if isResolver(msg.WorkerID) {
-				m.ResolverCount++
-				m.ResolverStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
-			} else if isEnhancer(msg.WorkerID) {
-				m.EnhancerCount++
-				m.EnhancerStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
-			} else if isCleaner(msg.WorkerID) {
-				m.CleanerCount++
-				m.CleanerStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
-			} else {
-				m.AnalyzerCount++
-				m.AnalyzerStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
-			}
-		}
-	case EventWorkerStopped:
-		if msg.WorkerID != "" {
-			if isResolver(msg.WorkerID) {
-				if m.ResolverCount > 0 {
-					m.ResolverCount--
-				}
-				delete(m.ResolverStates, msg.WorkerID)
-			} else if isEnhancer(msg.WorkerID) {
-				if m.EnhancerCount > 0 {
-					m.EnhancerCount--
-				}
-				delete(m.EnhancerStates, msg.WorkerID)
-			} else if isCleaner(msg.WorkerID) {
-				if m.CleanerCount > 0 {
-					m.CleanerCount--
-				}
-				delete(m.CleanerStates, msg.WorkerID)
-			} else {
-				if m.AnalyzerCount > 0 {
-					m.AnalyzerCount--
-				}
-				delete(m.AnalyzerStates, msg.WorkerID)
-			}
-		} else {
-			if strings.Contains(msg.Message, "Resolver") {
-				if m.ResolverCount > 0 {
-					m.ResolverCount--
-				}
-			} else if strings.Contains(msg.Message, "Enhancer") {
-				if m.EnhancerCount > 0 {
-					m.EnhancerCount--
-				}
-			} else if strings.Contains(msg.Message, "Cleaner") {
-				if m.CleanerCount > 0 {
-					m.CleanerCount--
-				}
-			} else {
-				if m.AnalyzerCount > 0 {
-					m.AnalyzerCount--
+		case EventWorkerStarted:
+			if msg.WorkerID != "" {
+				if isResolver(msg.WorkerID) {
+					m.ResolverCount++
+					m.ResolverStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
+				} else if isEnhancer(msg.WorkerID) {
+					m.EnhancerCount++
+					m.EnhancerStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
+				} else if isCleaner(msg.WorkerID) {
+					m.CleanerCount++
+					m.CleanerStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
+				} else if isLicense(msg.WorkerID) {
+					m.LicenseCount++
+					m.LicenseStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
+				} else {
+					m.AnalyzerCount++
+					m.AnalyzerStates[msg.WorkerID] = &workerState{ID: msg.WorkerID}
 				}
 			}
-		}
+		case EventWorkerStopped:
+			if msg.WorkerID != "" {
+				if isResolver(msg.WorkerID) {
+					if m.ResolverCount > 0 {
+						m.ResolverCount--
+					}
+					delete(m.ResolverStates, msg.WorkerID)
+				} else if isEnhancer(msg.WorkerID) {
+					if m.EnhancerCount > 0 {
+						m.EnhancerCount--
+					}
+					delete(m.EnhancerStates, msg.WorkerID)
+				} else if isCleaner(msg.WorkerID) {
+					if m.CleanerCount > 0 {
+						m.CleanerCount--
+					}
+					delete(m.CleanerStates, msg.WorkerID)
+				} else if isLicense(msg.WorkerID) {
+					if m.LicenseCount > 0 {
+						m.LicenseCount--
+					}
+					delete(m.LicenseStates, msg.WorkerID)
+				} else {
+					if m.AnalyzerCount > 0 {
+						m.AnalyzerCount--
+					}
+					delete(m.AnalyzerStates, msg.WorkerID)
+				}
+			} else {
+				if strings.Contains(msg.Message, "Resolver") {
+					if m.ResolverCount > 0 {
+						m.ResolverCount--
+					}
+				} else if strings.Contains(msg.Message, "Enhancer") {
+					if m.EnhancerCount > 0 {
+						m.EnhancerCount--
+					}
+				} else if strings.Contains(msg.Message, "Cleaner") {
+					if m.CleanerCount > 0 {
+						m.CleanerCount--
+					}
+				} else if strings.Contains(msg.Message, "License") {
+					if m.LicenseCount > 0 {
+						m.LicenseCount--
+					}
+				} else {
+					if m.AnalyzerCount > 0 {
+						m.AnalyzerCount--
+					}
+				}
+			}
 		case EventAlbumResolving:
 			if msg.WorkerID != "" {
 				if ws, ok := m.ResolverStates[msg.WorkerID]; ok {
@@ -219,6 +240,9 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 				if ws, ok := m.EnhancerStates[msg.WorkerID]; ok {
 					ws.CurrentTask = msg.Identifier
 				}
+				if ws, ok := m.LicenseStates[msg.WorkerID]; ok {
+					ws.CurrentTask = msg.Identifier
+				}
 			}
 		case EventAnalysisComplete:
 			if msg.WorkerID != "" {
@@ -227,6 +251,13 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 					ws.CurrentTask = ""
 				}
 				if ws, ok := m.EnhancerStates[msg.WorkerID]; ok {
+					ws.ProcessedCount++
+					ws.CurrentTask = ""
+				}
+			}
+		case EventLicenseComplete:
+			if msg.WorkerID != "" {
+				if ws, ok := m.LicenseStates[msg.WorkerID]; ok {
 					ws.ProcessedCount++
 					ws.CurrentTask = ""
 				}
@@ -376,9 +407,15 @@ func (m DashboardModel) buildRightPanel(titleStyle, panelBorder lipgloss.Style, 
 	cleanerControls := "[l] add  [L] remove"
 	cleanerSection := m.buildPoolSection(sectionTitle, "Cleaner Pool", m.CleanerCount, m.CleanerStates, cleanerControls)
 
+	licenseControls := fmt.Sprintf("[k] add  [K] remove  ·  Remaining: %d", m.Stats.Albums.UnlicensedCount)
+	if m.Stats == nil {
+		licenseControls = "[k] add  [K] remove  ·  Remaining: -"
+	}
+	licenseSection := m.buildPoolSection(sectionTitle, "License Work", m.LicenseCount, m.LicenseStates, licenseControls)
+
 	const panelOverhead = 4 // 2 border + 2 padding
 
-	controlsContentHeight := lipgloss.Height(coordSection) + lipgloss.Height(resolverSection) + lipgloss.Height(analyzerSection) + lipgloss.Height(enhancerSection) + lipgloss.Height(cleanerSection) + 4
+	controlsContentHeight := lipgloss.Height(coordSection) + lipgloss.Height(resolverSection) + lipgloss.Height(analyzerSection) + lipgloss.Height(enhancerSection) + lipgloss.Height(cleanerSection) + lipgloss.Height(licenseSection) + 5
 
 	availBodyHeight := m.Height - 9 // tab(1) + status(4) + help(1) + title+gaps(3)
 
@@ -391,7 +428,7 @@ func (m DashboardModel) buildRightPanel(titleStyle, panelBorder lipgloss.Style, 
 	feedContent += RenderActivityFeed(m.Events, width-4, feedContentHeight-1)
 
 	controlsPanel := panelBorder.Width(width).Render(
-		coordSection + "\n" + resolverSection + "\n" + analyzerSection + "\n" + enhancerSection + "\n" + cleanerSection,
+		coordSection + "\n" + resolverSection + "\n" + analyzerSection + "\n" + enhancerSection + "\n" + cleanerSection + "\n" + licenseSection,
 	)
 	feedPanel := panelBorder.Width(width).Render(feedContent)
 

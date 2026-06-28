@@ -13,6 +13,8 @@ const (
 	CmdRemoveEnhancer       ControlAction = "remove_enhancer"
 	CmdAddCleaner           ControlAction = "add_cleaner"
 	CmdRemoveCleaner        ControlAction = "remove_cleaner"
+	CmdAddLicense           ControlAction = "add_license"
+	CmdRemoveLicense        ControlAction = "remove_license"
 	CmdResetFailed          ControlAction = "reset_failed"
 	CmdRestartWorker        ControlAction = "restart_worker"
 	CmdShutdown             ControlAction = "shutdown"

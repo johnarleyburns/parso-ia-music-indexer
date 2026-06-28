@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	metricsWindow   = 60 * time.Second
+	metricsWindow   = 5 * time.Minute
 	IABandwidthLimit = 1_048_576
 	IAAPIRateLimit   = 100.0 / 60.0
 )
@@ -31,6 +31,7 @@ type Metrics struct {
 	resolverCompletions  []time.Time
 	analyzerCompletions  []time.Time
 	enhancerCompletions  []time.Time
+	licenseCompletions   []time.Time
 
 	networkTimes    []durationRecord
 	clapTimes       []durationRecord
@@ -68,6 +69,12 @@ func (m *Metrics) RecordAnalyzerCompletion() {
 func (m *Metrics) RecordEnhancerCompletion() {
 	m.mu.Lock()
 	m.enhancerCompletions = append(m.enhancerCompletions, time.Now())
+	m.mu.Unlock()
+}
+
+func (m *Metrics) RecordLicenseCompletion() {
+	m.mu.Lock()
+	m.licenseCompletions = append(m.licenseCompletions, time.Now())
 	m.mu.Unlock()
 }
 
@@ -121,6 +128,12 @@ func (m *Metrics) prune(now time.Time) {
 		o++
 	}
 	m.enhancerCompletions = m.enhancerCompletions[o:]
+
+	p := 0
+	for p < len(m.licenseCompletions) && m.licenseCompletions[p].Before(cutoff) {
+		p++
+	}
+	m.licenseCompletions = m.licenseCompletions[p:]
 
 	m.networkTimes = pruneDurations(m.networkTimes, cutoff)
 	m.clapTimes = pruneDurations(m.clapTimes, cutoff)
@@ -212,6 +225,21 @@ func (m *Metrics) EnhancerRate() float64 {
 		elapsed = 1
 	}
 	return float64(len(m.enhancerCompletions)) / elapsed
+}
+
+func (m *Metrics) LicenseRate() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	m.prune(now)
+	if len(m.licenseCompletions) == 0 {
+		return 0
+	}
+	elapsed := now.Sub(m.licenseCompletions[0]).Seconds()
+	if elapsed < 1 {
+		elapsed = 1
+	}
+	return float64(len(m.licenseCompletions)) / elapsed
 }
 
 // AnalyzerTimeBreakdown returns the share of analyzer time spent on network

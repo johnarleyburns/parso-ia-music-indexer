@@ -214,6 +214,7 @@ func (m CollectionsModel) updateView(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 				if st.AvgListenability > 0 {
 					avgL = fmt.Sprintf("%.3f", st.AvgListenability)
 				}
+				freePct := fmt.Sprintf("%.0f%%", st.FreePercentage)
 				rows[i] = table.Row{
 					title,
 					source,
@@ -222,6 +223,7 @@ func (m CollectionsModel) updateView(msg tea.Msg) (CollectionsModel, tea.Cmd) {
 					fmt.Sprintf("%d", st.Total),
 					fmt.Sprintf("%d", st.Analyzed),
 					pct,
+					freePct,
 					avgL,
 					status,
 				}
@@ -649,6 +651,7 @@ func collectionsColumns() []table.Column {
 		{Title: "Tracks", Width: 7},
 		{Title: "Analyzed", Width: 8},
 		{Title: "% Done", Width: 7},
+		{Title: "% Free", Width: 7},
 		{Title: "Avg L", Width: 7},
 		{Title: "Status", Width: 10},
 	}

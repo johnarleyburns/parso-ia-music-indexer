@@ -110,6 +110,10 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 	nextCleanerID := 1
 	cleanerStopChs := make(map[int]chan struct{})
 
+	licenseCount := 0
+	nextLicenseID := 1
+	licenseStopChs := make(map[int]chan struct{})
+
 	dbMu := &sync.Mutex{}
 	iaClient := ia.NewClient(60 * time.Second)
 	iaClient.Transport = tui.NewInstrumentedTransport(metrics)
@@ -127,7 +131,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 	events <- tui.ActivityEvent{
 		Type:      tui.EventInfo,
 		Timestamp: time.Now(),
-		Message:   fmt.Sprintf("Application started. %s. [s] coordinator  [r] resolvers  [w] analyzers  [e] enhancers  [l] cleaners", collMsg),
+		Message:   fmt.Sprintf("Application started. %s. [s] coordinator  [r] resolvers  [w] analyzers  [e] enhancers  [l] cleaners  [k] license", collMsg),
 	}
 
 	for {
@@ -260,22 +264,51 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 					Message:    fmt.Sprintf("Cleaner %s started (pool: %d)", cID, cleanerCount),
 				}
 				safeGo(func() { listenabilityCleanerLoop(sqlDB, events, stopCh, dbMu, clapClient, cID, metrics, cfg.ListenabilityCleanerAction) }, events, cID)
-			case tui.CmdRemoveCleaner:
-				if cleanerCount > 0 {
-					cleanerCount--
-					for id, ch := range cleanerStopChs {
-						close(ch)
-						delete(cleanerStopChs, id)
-						break
-					}
-					events <- tui.ActivityEvent{
-						Type:      tui.EventWorkerStopped,
-						Timestamp: time.Now(),
-						Message:   fmt.Sprintf("Cleaner removed (pool: %d)", cleanerCount),
-					}
+		case tui.CmdRemoveCleaner:
+			if cleanerCount > 0 {
+				cleanerCount--
+				for id, ch := range cleanerStopChs {
+					close(ch)
+					delete(cleanerStopChs, id)
+					break
 				}
+				events <- tui.ActivityEvent{
+					Type:      tui.EventWorkerStopped,
+					Timestamp: time.Now(),
+					Message:   fmt.Sprintf("Cleaner removed (pool: %d)", cleanerCount),
+				}
+			}
 
-			case tui.CmdShutdown:
+		case tui.CmdAddLicense:
+			licenseCount++
+			kID := fmt.Sprintf("license-%d", nextLicenseID)
+			nextLicenseID++
+			stopCh := make(chan struct{})
+			licenseStopChs[nextLicenseID-1] = stopCh
+			events <- tui.ActivityEvent{
+				Type:       tui.EventWorkerStarted,
+				Timestamp:  time.Now(),
+				Identifier: kID,
+				WorkerID:   kID,
+				Message:    fmt.Sprintf("License worker %s started (pool: %d)", kID, licenseCount),
+			}
+			safeGo(func() { licenseWorkerLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, kID, metrics) }, events, kID)
+		case tui.CmdRemoveLicense:
+			if licenseCount > 0 {
+				licenseCount--
+				for id, ch := range licenseStopChs {
+					close(ch)
+					delete(licenseStopChs, id)
+					break
+				}
+				events <- tui.ActivityEvent{
+					Type:      tui.EventWorkerStopped,
+					Timestamp: time.Now(),
+					Message:   fmt.Sprintf("License worker removed (pool: %d)", licenseCount),
+				}
+			}
+
+		case tui.CmdShutdown:
 				if coordRunning {
 					close(coordStopCh)
 				}
@@ -289,6 +322,9 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 			close(ch)
 		}
 		for _, ch := range cleanerStopChs {
+			close(ch)
+		}
+		for _, ch := range licenseStopChs {
 			close(ch)
 		}
 		return
@@ -363,21 +399,35 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 						Message:    fmt.Sprintf("Resolver %s started (pool: %d)", rID, resolverCount),
 					}
 					safeGo(func() { albumResolverLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, rID, metrics) }, events, rID)
-				case strings.HasPrefix(cmd.WorkerID, "enhancer"):
-					enhancerCount++
-					eID := fmt.Sprintf("enhancer-%d", nextEnhancerID)
-					nextEnhancerID++
-					stopCh := make(chan struct{})
-					enhancerStopChs[nextEnhancerID-1] = stopCh
-					events <- tui.ActivityEvent{
-						Type:       tui.EventWorkerStarted,
-						Timestamp:  time.Now(),
-						Identifier: eID,
-						WorkerID:   eID,
-						Message:    fmt.Sprintf("Enhancer %s started (pool: %d)", eID, enhancerCount),
-					}
-					safeGo(func() { tagEnhancerLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, eID, metrics) }, events, eID)
-				default:
+			case strings.HasPrefix(cmd.WorkerID, "enhancer"):
+				enhancerCount++
+				eID := fmt.Sprintf("enhancer-%d", nextEnhancerID)
+				nextEnhancerID++
+				stopCh := make(chan struct{})
+				enhancerStopChs[nextEnhancerID-1] = stopCh
+				events <- tui.ActivityEvent{
+					Type:       tui.EventWorkerStarted,
+					Timestamp:  time.Now(),
+					Identifier: eID,
+					WorkerID:   eID,
+					Message:    fmt.Sprintf("Enhancer %s started (pool: %d)", eID, enhancerCount),
+				}
+				safeGo(func() { tagEnhancerLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, eID, metrics) }, events, eID)
+			case strings.HasPrefix(cmd.WorkerID, "license"):
+				licenseCount++
+				kID := fmt.Sprintf("license-%d", nextLicenseID)
+				nextLicenseID++
+				stopCh := make(chan struct{})
+				licenseStopChs[nextLicenseID-1] = stopCh
+				events <- tui.ActivityEvent{
+					Type:       tui.EventWorkerStarted,
+					Timestamp:  time.Now(),
+					Identifier: kID,
+					WorkerID:   kID,
+					Message:    fmt.Sprintf("License worker %s started (pool: %d)", kID, licenseCount),
+				}
+				safeGo(func() { licenseWorkerLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, kID, metrics) }, events, kID)
+			default:
 					events <- tui.ActivityEvent{
 						Type:      tui.EventInfo,
 						Timestamp: time.Now(),
@@ -931,6 +981,110 @@ func tagEnhancerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-cha
 			Message:    fmt.Sprintf("[%s] Enhanced %s with %d tags (%d tracks)", workerID, album.IAIdentifier, len(strings.Split(tags, ", ")), album.TrackCount),
 		}
 		metrics.RecordEnhancerCompletion()
+	}
+}
+
+func licenseWorkerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
+	dbMu *sync.Mutex, iaClient *http.Client, iaLimiter *ratelimit.Limiter, workerID string, metrics *tui.Metrics) {
+	for {
+		select {
+		case <-stopCh:
+			return
+		default:
+		}
+
+		dbMu.Lock()
+		album, err := db.ClaimUnlicensedAlbum(sqlDB.Conn)
+		dbMu.Unlock()
+		if err != nil {
+			events <- tui.ActivityEvent{
+				Type:      tui.EventInfo,
+				Timestamp: time.Now(),
+				WorkerID:  workerID,
+				Message:   fmt.Sprintf("[%s] Claim unlicensed album error: %v", workerID, err),
+				Error:     err.Error(),
+			}
+			sleepOrStop(10*time.Second, stopCh)
+			continue
+		}
+
+		if album == nil {
+			sleepOrStop(15*time.Second, stopCh)
+			continue
+		}
+
+		events <- tui.ActivityEvent{
+			Type:       tui.EventAnalysisStarted,
+			Timestamp:  time.Now(),
+			Identifier: album.IAIdentifier,
+			WorkerID:   workerID,
+			Message:    fmt.Sprintf("[%s] Resolving license for %s (%d tracks)", workerID, album.IAIdentifier, album.TrackCount),
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := iaLimiter.Wait(ctx); err != nil {
+			cancel()
+			events <- tui.ActivityEvent{
+				Type:       tui.EventInfo,
+				Timestamp:  time.Now(),
+				Identifier: album.IAIdentifier,
+				WorkerID:   workerID,
+				Message:    fmt.Sprintf("[%s] Rate limit wait for %s, will retry", workerID, album.IAIdentifier),
+			}
+			sleepOrStop(30*time.Second, stopCh)
+			continue
+		}
+		meta, metaErr := ia.LookupAlbumMetadata(ctx, iaClient, album.IAIdentifier)
+		cancel()
+		if metaErr != nil {
+			errMsg := fmt.Sprintf("metadata: %v", metaErr)
+			if isTransientError(errMsg) {
+				events <- tui.ActivityEvent{
+					Type:       tui.EventInfo,
+					Timestamp:  time.Now(),
+					Identifier: album.IAIdentifier,
+					WorkerID:   workerID,
+					Message:    fmt.Sprintf("[%s] Transient metadata error %s: %v, will retry", workerID, album.IAIdentifier, metaErr),
+				}
+				sleepOrStop(5*time.Second, stopCh)
+			} else {
+				events <- tui.ActivityEvent{
+					Type:       tui.EventAnalysisFailed,
+					Timestamp:  time.Now(),
+					Identifier: album.IAIdentifier,
+					WorkerID:   workerID,
+					Message:    fmt.Sprintf("[%s] Metadata fetch error %s: %v", workerID, album.IAIdentifier, metaErr),
+					Error:      metaErr.Error(),
+				}
+			}
+			continue
+		}
+
+		license := ia.ClassifyLicense(meta.LicenseURL)
+
+		dbMu.Lock()
+		if err := db.UpdateAlbumLicense(sqlDB.Conn, album.IAIdentifier, license); err != nil {
+			dbMu.Unlock()
+			events <- tui.ActivityEvent{
+				Type:       tui.EventInfo,
+				Timestamp:  time.Now(),
+				Identifier: album.IAIdentifier,
+				WorkerID:   workerID,
+				Message:    fmt.Sprintf("[%s] Storing license error %s: %v", workerID, album.IAIdentifier, err),
+				Error:      err.Error(),
+			}
+			continue
+		}
+		dbMu.Unlock()
+
+		events <- tui.ActivityEvent{
+			Type:       tui.EventLicenseComplete,
+			Timestamp:  time.Now(),
+			Identifier: album.IAIdentifier,
+			WorkerID:   workerID,
+			Message:    fmt.Sprintf("[%s] License resolved for %s: %s (url: %s)", workerID, album.IAIdentifier, license, meta.LicenseURL),
+		}
+		metrics.RecordLicenseCompletion()
 	}
 }
 
@@ -1638,6 +1792,20 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan s
 			WorkerID:   workerID,
 			Message:    fmt.Sprintf("[%s] Storing album metadata %s: %v", workerID, albumID, err),
 			Error:      err.Error(),
+		}
+	}
+
+	license := ia.ClassifyLicense(album.LicenseURL)
+	if license != "unknown" {
+		if err := db.UpdateAlbumLicense(sqlDB.Conn, albumID, license); err != nil {
+			events <- tui.ActivityEvent{
+				Type:       tui.EventInfo,
+				Timestamp:  time.Now(),
+				Identifier: albumID,
+				WorkerID:   workerID,
+				Message:    fmt.Sprintf("[%s] Storing license %s: %v", workerID, albumID, err),
+				Error:      err.Error(),
+			}
 		}
 	}
 

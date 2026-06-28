@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/johnarleyburns/parso-ia-music-indexer/internal/db"
+	"github.com/johnarleyburns/parso-ia-music-indexer/internal/ia"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/key"
@@ -695,6 +696,13 @@ func (m BrowseModel) renderAlbumDetailHeader(b *strings.Builder, titleStyle, mut
 	}
 	if a.AvgListenability > 0 {
 		parts = append(parts, fmt.Sprintf("avg listen %.3f", a.AvgListenability))
+	}
+	if a.License != "" && a.License != "unknown" {
+		licenseLabel := a.License
+		if ia.IsCommerciallyUsable(a.License) {
+			licenseLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e")).Render(a.License)
+		}
+		parts = append(parts, fmt.Sprintf("license %s", licenseLabel))
 	}
 	b.WriteString(mutedStyle.Render(strings.Join(parts, " \u00b7 ")))
 	b.WriteString("\n")

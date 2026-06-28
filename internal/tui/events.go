@@ -25,6 +25,7 @@ const (
 	EventAnalysisUnavailable  EventType = "analysis_unavailable"
 	EventCleanerStarted       EventType = "cleaner_started"
 	EventCleanerBatch         EventType = "cleaner_batch"
+	EventLicenseComplete      EventType = "license_complete"
 	EventInfo                 EventType = "info"
 )
 
