@@ -1622,3 +1622,35 @@ func TestDecodeF16LengthMismatch(t *testing.T) {
 		t.Errorf("expected 1 float from 2 bytes (truncated), got %d", len(decoded))
 	}
 }
+
+func TestGetAlbumCollectionName(t *testing.T) {
+	db := testDB(t)
+
+	if got := GetAlbumCollectionName(db.Conn, "album-unlinked"); got != "" {
+		t.Errorf("unlinked album: expected empty, got %q", got)
+	}
+
+	if err := InsertCollection(db.Conn, CollectionInsert{CollectionID: "musopen-free", Title: "Musopen (Free)", Query: "q"}); err != nil {
+		t.Fatalf("InsertCollection: %v", err)
+	}
+	if err := InsertCollection(db.Conn, CollectionInsert{CollectionID: "no-title", Title: "", Query: "q"}); err != nil {
+		t.Fatalf("InsertCollection: %v", err)
+	}
+	if _, err := BulkInsertAlbums(db.Conn, []AlbumInsert{{Identifier: "album-a"}, {Identifier: "album-b"}}); err != nil {
+		t.Fatalf("BulkInsertAlbums: %v", err)
+	}
+	if err := LinkAlbumToCollection(db.Conn, "musopen-free", "album-a"); err != nil {
+		t.Fatalf("LinkAlbumToCollection: %v", err)
+	}
+	if err := LinkAlbumToCollection(db.Conn, "no-title", "album-b"); err != nil {
+		t.Fatalf("LinkAlbumToCollection: %v", err)
+	}
+
+	if got := GetAlbumCollectionName(db.Conn, "album-a"); got != "Musopen (Free)" {
+		t.Errorf("linked album: expected %q, got %q", "Musopen (Free)", got)
+	}
+	if got := GetAlbumCollectionName(db.Conn, "album-b"); got != "no-title" {
+		t.Errorf("empty-title collection: expected fallback to id %q, got %q", "no-title", got)
+	}
+}
+

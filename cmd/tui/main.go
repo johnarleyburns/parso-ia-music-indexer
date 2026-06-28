@@ -1238,8 +1238,12 @@ func listenabilityCleanerLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, sto
 				continue
 			}
 			if result.Decision == "exclude" {
-				log.Printf("[%s] EXCLUDED track %d %q: duration=%.1fs score=%.3f tier=%s reasons=%v",
-					workerID, claim.TrackID, claim.Title, claim.Duration, result.Score, result.Tier, result.Reasons)
+				collName := db.GetAlbumCollectionName(sqlDB.Conn, claim.AlbumID)
+				if collName == "" {
+					collName = "unknown"
+				}
+				log.Printf("[%s] EXCLUDED track %d %q [collection: %s]: duration=%.1fs score=%.3f tier=%s reasons=%v",
+					workerID, claim.TrackID, claim.Title, collName, claim.Duration, result.Score, result.Tier, result.Reasons)
 			}
 			if cleanerAction == "mark-unavailable" && result.Decision == "exclude" {
 				db.MarkTrackUnavailable(sqlDB.Conn, claim.TrackID, fmt.Sprintf("listenability: exclude decision (score=%.3f tier=%s)", result.Score, result.Tier))
@@ -1311,6 +1315,10 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	if track.CollectionName != "" {
 		trackLabel += "  (" + track.CollectionName + ")"
 	}
+	trackCollection := track.CollectionName
+	if trackCollection == "" {
+		trackCollection = "unknown"
+	}
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -1360,8 +1368,8 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	})
 
 	if precheckResult.Decision == "exclude" && precheckResult.Stream == "excluded" {
-		log.Printf("[%s] EXCLUDED track %d %q: duration=%.1fs score=%.3f tier=%s reasons=%v",
-			workerID, track.ID, trackName, track.Duration, precheckResult.Score, precheckResult.Tier, precheckResult.Reasons)
+		log.Printf("[%s] EXCLUDED track %d %q [collection: %s]: duration=%.1fs score=%.3f tier=%s reasons=%v",
+			workerID, track.ID, trackName, trackCollection, track.Duration, precheckResult.Score, precheckResult.Tier, precheckResult.Reasons)
 		dbMu.Lock()
 		db.UpdateTrackListenability(sqlDB.Conn, track.ID, precheckResult, workerID)
 		if track.Duration > 0 && track.Duration < listenability.MinTrackSeconds {
@@ -1428,7 +1436,7 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 				Timestamp:  time.Now(),
 				Identifier: track.AlbumID,
 				WorkerID:   workerID,
-				Message:    fmt.Sprintf("[%s] Album access-restricted %s: %v (%d pending tracks unavailable)", workerID, track.AlbumID, err, skipped),
+				Message:    fmt.Sprintf("[%s] Album access-restricted %s [collection: %s]: %v (%d pending tracks unavailable)", workerID, track.AlbumID, trackCollection, err, skipped),
 				Error:      err.Error(),
 			}
 		} else if isTransientError(errMsg) {
@@ -1471,7 +1479,7 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	pcmSamples, sampleRate, err := audio.DecodeMP3(mp3Data, track.Duration)
 	metrics.RecordProcessingTime(time.Since(decodeStart))
 	if err != nil {
-		log.Printf("[%s] DECODE FAILED track %d %q: %v", workerID, track.ID, trackName, err)
+		log.Printf("[%s] DECODE FAILED track %d %q [collection: %s]: %v", workerID, track.ID, trackName, trackCollection, err)
 		reason := fmt.Sprintf("decode: %v", err)
 		dbMu.Lock()
 		db.MarkTrackUnavailable(sqlDB.Conn, track.ID, reason)
@@ -1608,6 +1616,18 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 	return true
 }
 
+// albumCollectionLabel returns a " [collection: ...]" suffix naming the source
+// collection(s) of an album, for use in exclusion/unavailable log messages. It
+// always returns a non-empty label so the source collection is stated even when
+// the link cannot be resolved.
+func albumCollectionLabel(sqlDB *db.DB, albumID string) string {
+	name := db.GetAlbumCollectionName(sqlDB.Conn, albumID)
+	if name == "" {
+		name = "unknown"
+	}
+	return " [collection: " + name + "]"
+}
+
 func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
 	dbMu *sync.Mutex, iaClient *http.Client, iaLimiter *ratelimit.Limiter, workerID, albumID string, metrics *tui.Metrics, freeOnly bool) {
 
@@ -1669,7 +1689,7 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan s
 			Timestamp:  time.Now(),
 			Identifier: albumID,
 			WorkerID:   workerID,
-			Message:    fmt.Sprintf("[%s] Album unavailable %s: %v", workerID, albumID, err),
+			Message:    fmt.Sprintf("[%s] Album unavailable %s: %v%s", workerID, albumID, err, albumCollectionLabel(sqlDB, albumID)),
 			Error:      err.Error(),
 		}
 		return
@@ -1684,7 +1704,7 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan s
 			Timestamp:  time.Now(),
 			Identifier: albumID,
 			WorkerID:   workerID,
-			Message:    fmt.Sprintf("[%s] Access-restricted album %s", workerID, albumID),
+			Message:    fmt.Sprintf("[%s] Access-restricted album %s%s", workerID, albumID, albumCollectionLabel(sqlDB, albumID)),
 		}
 		return
 	}
@@ -1698,7 +1718,7 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan s
 			Timestamp:  time.Now(),
 			Identifier: albumID,
 			WorkerID:   workerID,
-			Message:    fmt.Sprintf("[%s] Album %s: %s", workerID, albumID, reason),
+			Message:    fmt.Sprintf("[%s] Album %s: %s%s", workerID, albumID, reason, albumCollectionLabel(sqlDB, albumID)),
 		}
 		return
 	}
@@ -1716,7 +1736,7 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan s
 				Timestamp:  time.Now(),
 				Identifier: albumID,
 				WorkerID:   workerID,
-				Message:    fmt.Sprintf("[%s] Album %s %s", workerID, albumID, reason),
+				Message:    fmt.Sprintf("[%s] Album %s %s%s", workerID, albumID, reason, albumCollectionLabel(sqlDB, albumID)),
 			}
 			return
 		}
@@ -1731,7 +1751,7 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan s
 			Timestamp:  time.Now(),
 			Identifier: albumID,
 			WorkerID:   workerID,
-			Message:    fmt.Sprintf("[%s] Album %s: no acceptable MP3 tracks", workerID, albumID),
+			Message:    fmt.Sprintf("[%s] Album %s: no acceptable MP3 tracks%s", workerID, albumID, albumCollectionLabel(sqlDB, albumID)),
 		}
 		return
 	}

@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -364,4 +365,31 @@ func GetCollectionAlbumCount(db *sql.DB, collectionID string) (int, error) {
 		`SELECT count(*) FROM collection_albums WHERE collection_id = ?`, collectionID,
 	).Scan(&count)
 	return count, err
+}
+
+// GetAlbumCollectionName returns a human-readable label of the collection(s) an
+// album belongs to (title, falling back to collection_id), comma-joined when an
+// album is linked to more than one. Returns "" when the album has no collection
+// link. Intended for logging the source collection of an excluded album/track.
+func GetAlbumCollectionName(db *sql.DB, albumID string) string {
+	rows, err := db.Query(
+		`SELECT COALESCE(NULLIF(c.title, ''), c.collection_id)
+		 FROM collection_albums ca
+		 JOIN collections c ON ca.collection_id = c.collection_id
+		 WHERE ca.album_id = ?
+		 ORDER BY c.title`, albumID,
+	)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err == nil && n != "" {
+			names = append(names, n)
+		}
+	}
+	return strings.Join(names, ", ")
 }
