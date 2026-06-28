@@ -24,6 +24,7 @@ type Config struct {
 	SampleSkipSeconds       int
 	ListenabilityMinTrackSecs int
 	ListenabilityCleanerAction string
+	FreeOnly                bool
 }
 
 func Parse() *Config {
@@ -46,6 +47,7 @@ func Parse() *Config {
 	flag.IntVar(&cfg.SampleSkipSeconds, "sample-skip-seconds", envOrDefaultInt("SAMPLE_SKIP_SECONDS", 20), "Seconds to skip from start before sampling (midpoint/multiwindow)")
 	flag.IntVar(&cfg.ListenabilityMinTrackSecs, "listenability-min-track-seconds", envOrDefaultInt("LISTENABILITY_MIN_TRACK_SECS", 60), "Minimum track duration in seconds for listenability scoring")
 	flag.StringVar(&cfg.ListenabilityCleanerAction, "listenability-cleaner-action", envOrDefault("LISTENABILITY_CLEANER_ACTION", "score-only"), "Cleaner action: score-only or mark-unavailable")
+	flag.BoolVar(&cfg.FreeOnly, "free-only", envOrDefaultBool("FREE_ONLY", true), "Index only commercially-usable licenses (pd, cc0, cc-by, cc-by-sa); mark others unavailable")
 	flag.Parse()
 
 	return cfg
@@ -66,4 +68,15 @@ func envOrDefaultInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+func envOrDefaultBool(key string, def bool) bool {
+	switch os.Getenv(key) {
+	case "1", "true", "TRUE", "True", "yes", "on":
+		return true
+	case "0", "false", "FALSE", "False", "no", "off":
+		return false
+	default:
+		return def
+	}
 }

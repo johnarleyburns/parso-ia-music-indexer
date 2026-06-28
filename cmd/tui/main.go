@@ -176,7 +176,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 					WorkerID:   rID,
 					Message:    fmt.Sprintf("Resolver %s started (pool: %d)", rID, resolverCount),
 				}
-				safeGo(func() { albumResolverLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, rID, metrics) }, events, rID)
+				safeGo(func() { albumResolverLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, rID, metrics, cfg.FreeOnly) }, events, rID)
 			case tui.CmdRemoveResolver:
 				if resolverCount > 0 {
 					resolverCount--
@@ -398,7 +398,7 @@ func runCoordinator(cfg *config.Config, sqlDB *db.DB, events chan<- tui.Activity
 						WorkerID:   rID,
 						Message:    fmt.Sprintf("Resolver %s started (pool: %d)", rID, resolverCount),
 					}
-					safeGo(func() { albumResolverLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, rID, metrics) }, events, rID)
+					safeGo(func() { albumResolverLoop(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, rID, metrics, cfg.FreeOnly) }, events, rID)
 			case strings.HasPrefix(cmd.WorkerID, "enhancer"):
 				enhancerCount++
 				eID := fmt.Sprintf("enhancer-%d", nextEnhancerID)
@@ -695,7 +695,7 @@ func discoverCollection(cfg *config.Config, sqlDB *db.DB, client *http.Client, i
 }
 
 func albumResolverLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
-	dbMu *sync.Mutex, iaClient *http.Client, iaLimiter *ratelimit.Limiter, resolverID string, metrics *tui.Metrics) {
+	dbMu *sync.Mutex, iaClient *http.Client, iaLimiter *ratelimit.Limiter, resolverID string, metrics *tui.Metrics, freeOnly bool) {
 	for {
 		select {
 		case <-stopCh:
@@ -723,7 +723,7 @@ func albumResolverLoop(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-c
 			continue
 		}
 
-		resolveAlbum(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, resolverID, albumID, metrics)
+		resolveAlbum(sqlDB, events, stopCh, dbMu, iaClient, iaLimiter, resolverID, albumID, metrics, freeOnly)
 		sleepOrStop(1*time.Second, stopCh)
 	}
 }
@@ -1609,7 +1609,7 @@ func analyzeTrack(cfg *config.Config, sqlDB *db.DB, events chan<- tui.ActivityEv
 }
 
 func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan struct{},
-	dbMu *sync.Mutex, iaClient *http.Client, iaLimiter *ratelimit.Limiter, workerID, albumID string, metrics *tui.Metrics) {
+	dbMu *sync.Mutex, iaClient *http.Client, iaLimiter *ratelimit.Limiter, workerID, albumID string, metrics *tui.Metrics, freeOnly bool) {
 
 	events <- tui.ActivityEvent{
 		Type:       tui.EventAlbumResolving,
@@ -1701,6 +1701,25 @@ func resolveAlbum(sqlDB *db.DB, events chan<- tui.ActivityEvent, stopCh <-chan s
 			Message:    fmt.Sprintf("[%s] Album %s: %s", workerID, albumID, reason),
 		}
 		return
+	}
+
+	if freeOnly {
+		license := ia.ClassifyLicense(album.LicenseURL)
+		if !ia.IsCommerciallyUsable(license) {
+			reason := fmt.Sprintf("excluded: non-free license (%s)", license)
+			dbMu.Lock()
+			db.UpdateAlbumLicense(sqlDB.Conn, albumID, license)
+			db.MarkAlbumUnavailable(sqlDB.Conn, albumID, reason)
+			dbMu.Unlock()
+			events <- tui.ActivityEvent{
+				Type:       tui.EventAlbumUnavailable,
+				Timestamp:  time.Now(),
+				Identifier: albumID,
+				WorkerID:   workerID,
+				Message:    fmt.Sprintf("[%s] Album %s %s", workerID, albumID, reason),
+			}
+			return
+		}
 	}
 
 	if len(album.Tracks) == 0 {
