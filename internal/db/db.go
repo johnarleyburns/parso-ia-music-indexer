@@ -18,12 +18,19 @@ type DB struct {
 }
 
 func Open(path string) (*DB, error) {
-	conn, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000&_wal_autocheckpoint=1000")
+	conn, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=10000&_wal_autocheckpoint=1000")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
-	conn.SetMaxOpenConns(8)
+	// SQLite allows only one writer at a time. With a multi-connection pool,
+	// concurrent writers from different worker goroutines collide and surface as
+	// "database is locked" (SQLITE_BUSY) once the busy timeout expires. Pinning
+	// the pool to a single connection serializes all access in Go so writes never
+	// contend at the SQLite level. DB calls here are tiny; the expensive work
+	// (network, decode, CLAP) happens outside the DB, so this is not a throughput
+	// bottleneck.
+	conn.SetMaxOpenConns(1)
 
 	db := &DB{Conn: conn, Path: path, stopCheckpoint: make(chan struct{})}
 	if err := db.migrate(); err != nil {

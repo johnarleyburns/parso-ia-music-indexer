@@ -421,3 +421,33 @@ func TestDecodeMP3NoHang(t *testing.T) {
 		}
 	}
 }
+
+func TestMaxDecodedSamplesCeiling(t *testing.T) {
+	// Linear in input size and independent of any track duration.
+	if got := maxDecodedSamples(0); got != 1 {
+		t.Errorf("maxDecodedSamples(0) = %d, want 1", got)
+	}
+	if maxDecodedSamples(2000) != 2*maxDecodedSamples(1000)-1 {
+		t.Errorf("ceiling should scale linearly with input size")
+	}
+
+	// A ~1.6MB analyzer window (cfg.MaxBytes default) must never trip the ceiling
+	// for a realistic low-bitrate track. 128 kbps -> ~100s of audio; decoded as
+	// interleaved 16-bit stereo that is ~100 * 44100 * 2 samples. The old ceiling
+	// was sized from the full-track metadata duration and tripped here.
+	const windowBytes = 1_600_000
+	ceiling := maxDecodedSamples(windowBytes)
+
+	realisticSamples := 100 * 44100 * 2
+	if realisticSamples >= ceiling {
+		t.Errorf("realistic decode (%d samples) must stay under ceiling (%d)", realisticSamples, ceiling)
+	}
+
+	// The ceiling must also cover the worst legal MPEG case: 48 kHz at 8 kbps,
+	// the maximum samples-per-byte ratio. This is the tight upper bound.
+	worstCaseSeconds := float64(windowBytes) * 8 / 8000
+	worstCaseSamples := int(worstCaseSeconds * 48000 * 2)
+	if worstCaseSamples > ceiling {
+		t.Errorf("ceiling (%d) must cover worst-case valid decode (%d samples)", ceiling, worstCaseSamples)
+	}
+}

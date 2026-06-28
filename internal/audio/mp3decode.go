@@ -66,6 +66,7 @@ func isRecoverableMPEGError(err error) bool {
 		"invalid side info",
 		"framesize =",
 		"invalid number of bits",
+		"mp3 decode panic",
 	}
 	for _, p := range recoverable {
 		if strings.Contains(msg, p) {
@@ -75,7 +76,38 @@ func isRecoverableMPEGError(err error) bool {
 	return false
 }
 
-func decodeMP3FromData(data []byte, maxDurationSec float64) (samples []float64, sampleRate int, err error) {
+// maxSamplesPerInputByte bounds how many interleaved 16-bit samples a single
+// input byte can legally decode to. go-mp3 always emits 16-bit stereo PCM, so
+// the worst case is the highest sample rate (48 kHz) at the lowest MP3 bitrate
+// (8 kbps): 8*48000/8000 = 48 samples/byte per channel, ×2 channels = 96. Any
+// output beyond this cannot be valid audio, so it bounds runaway/looping decodes
+// without ever cutting off a valid byte-bounded window.
+const maxSamplesPerInputByte = 96
+
+// maxDecodedSamples bounds how many interleaved 16-bit samples a window of
+// dataLen MP3 bytes may decode to. It depends only on the input size, never on
+// the (often longer) full-track metadata duration, so a byte-bounded sample
+// window always decodes to EOF before the ceiling is reached.
+func maxDecodedSamples(dataLen int) int {
+	return dataLen*maxSamplesPerInputByte + 1
+}
+
+// safeDecodeMP3FromData wraps decodeMP3FromData so a panic from the underlying
+// MP3 library (e.g. an index-out-of-range on malformed frames) is converted into
+// a recoverable error, letting DecodeMP3 try the next frame-sync offset instead
+// of aborting the whole decode.
+func safeDecodeMP3FromData(data []byte) (samples []float64, sampleRate int, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			samples = nil
+			sampleRate = 0
+			err = fmt.Errorf("mp3 decode panic: %v", r)
+		}
+	}()
+	return decodeMP3FromData(data)
+}
+
+func decodeMP3FromData(data []byte) (samples []float64, sampleRate int, err error) {
 	reader := bytes.NewReader(data)
 	decoder, decErr := mp3.NewDecoder(reader)
 	if decErr != nil {
@@ -87,21 +119,23 @@ func decodeMP3FromData(data []byte, maxDurationSec float64) (samples []float64, 
 	estimatedSamples := len(data) * 5
 	samples = make([]float64, 0, estimatedSamples)
 
-	maxIters := int(maxDurationSec*float64(sampleRate)*2/2048) + 1
-	iterCount := 0
+	// The decoder reads from a finite in-memory buffer, so it terminates at EOF.
+	// Bound the decoded sample count to what the input could plausibly yield as a
+	// guard against a runaway/looping decoder; this is sized from the data we
+	// actually have rather than the (often longer) full-track metadata duration,
+	// so valid byte-bounded sample windows decode completely.
+	maxSamples := maxDecodedSamples(len(data))
 
 	buf := make([]byte, 4096)
 	for {
-		if iterCount >= maxIters {
-			return nil, 0, fmt.Errorf("mp3 decode exceeded duration ceiling: %d iterations (max %.0fs)", iterCount, maxDurationSec)
-		}
-		iterCount++
-
 		n, readErr := decoder.Read(buf)
 		if n > 0 {
-			for i := 0; i < n; i += 2 {
+			for i := 0; i+1 < n; i += 2 {
 				left := int16(buf[i]) | int16(buf[i+1])<<8
 				samples = append(samples, float64(left)/32768.0)
+			}
+			if len(samples) > maxSamples {
+				return nil, 0, fmt.Errorf("mp3 decode exceeded sample ceiling: %d samples (max %d for %d input bytes)", len(samples), maxSamples, len(data))
 			}
 		}
 		if readErr == io.EOF {
@@ -124,7 +158,13 @@ func decodeMP3FromData(data []byte, maxDurationSec float64) (samples []float64, 
 
 const maxFrameSyncAttempts = 3
 
+// DecodeMP3 decodes an in-memory MP3 byte window to interleaved PCM samples.
+// metadataDurationSec is retained for API compatibility but no longer bounds the
+// decode: the sample ceiling is derived from the input size (see
+// decodeMP3FromData), so byte-bounded sample windows decode completely regardless
+// of the full-track metadata duration.
 func DecodeMP3(data []byte, metadataDurationSec float64) (samples []float64, sampleRate int, err error) {
+	_ = metadataDurationSec
 	defer func() {
 		if r := recover(); r != nil {
 			samples = nil
@@ -137,14 +177,9 @@ func DecodeMP3(data []byte, metadataDurationSec float64) (samples []float64, sam
 		return nil, 0, fmt.Errorf("mp3 data too short (%d bytes)", len(data))
 	}
 
-	ceilingSec := metadataDurationSec
-	if ceilingSec > 10800 {
-		ceilingSec = 10800
-	}
-
 	offsets := findAllFrameSyncOffsets(data, maxFrameSyncAttempts+1)
 	if len(offsets) == 0 {
-		samples, sampleRate, err = decodeMP3FromData(data, ceilingSec)
+		samples, sampleRate, err = safeDecodeMP3FromData(data)
 		if err != nil {
 			return nil, 0, fmt.Errorf("mp3 init: %w", err)
 		}
@@ -157,7 +192,7 @@ func DecodeMP3(data []byte, metadataDurationSec float64) (samples []float64, sam
 		if len(trimmed) < 4 {
 			continue
 		}
-		samples, sampleRate, err = decodeMP3FromData(trimmed, ceilingSec)
+		samples, sampleRate, err = safeDecodeMP3FromData(trimmed)
 		if err == nil {
 			return samples, sampleRate, nil
 		}
