@@ -615,7 +615,9 @@ func ClaimNextTrackBatch(db *sql.DB, workerID string, batchSize int) ([]ClaimedT
 
 	rows, err := tx.Query(
 		`WITH album_recency AS (
-		     SELECT ca.album_id AS album_id, MAX(c.created_at) AS rec
+		     SELECT ca.album_id AS album_id,
+		            MAX(c.created_at) AS rec,
+		            MAX(CASE WHEN c.collection_id = ? THEN 1 ELSE 0 END) AS priority
 		     FROM collection_albums ca
 		     JOIN collections c ON ca.collection_id = c.collection_id
 		     GROUP BY ca.album_id
@@ -632,9 +634,9 @@ func ClaimNextTrackBatch(db *sql.DB, workerID string, batchSize int) ([]ClaimedT
 		 INNER JOIN albums a ON t.album_id = a.ia_identifier
 		 LEFT JOIN album_recency ar ON ar.album_id = t.album_id
 		 WHERE t.status = 'pending'
-		 ORDER BY ar.rec DESC, t.id ASC
+		 ORDER BY ar.priority DESC, ar.rec DESC, t.id ASC
 		 LIMIT ?`,
-		batchSize,
+		priorityCollectionID, batchSize,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("select pending tracks: %w", err)
