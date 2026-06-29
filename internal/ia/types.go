@@ -9,6 +9,7 @@ import (
 type ScrapeItem struct {
 	Identifier string `json:"identifier"`
 	Downloads  int    `json:"downloads"`
+	LicenseURL string `json:"licenseurl"`
 }
 
 type ScrapeResponse struct {
@@ -187,6 +188,34 @@ func parseDuration(s string) float64 {
 	if s == "" {
 		return 0
 	}
+
+	if strings.Contains(s, ":") {
+		parts := strings.Split(s, ":")
+		if len(parts) == 2 {
+			var min, sec float64
+			if _, err := fmt.Sscanf(parts[0], "%f", &min); err != nil {
+				return 0
+			}
+			if _, err := fmt.Sscanf(parts[1], "%f", &sec); err != nil {
+				return 0
+			}
+			return min*60 + sec
+		}
+		if len(parts) == 3 {
+			var h, min, sec float64
+			if _, err := fmt.Sscanf(parts[0], "%f", &h); err != nil {
+				return 0
+			}
+			if _, err := fmt.Sscanf(parts[1], "%f", &min); err != nil {
+				return 0
+			}
+			if _, err := fmt.Sscanf(parts[2], "%f", &sec); err != nil {
+				return 0
+			}
+			return h*3600 + min*60 + sec
+		}
+	}
+
 	var f float64
 	if _, err := fmt.Sscanf(s, "%f", &f); err == nil {
 		return f
@@ -268,4 +297,18 @@ var commerciallyUsableLicenses = map[string]bool{
 
 func IsCommerciallyUsable(license string) bool {
 	return commerciallyUsableLicenses[license]
+}
+
+func IsLicenseURLCommerciallyUsable(licenseURL string) bool {
+	return IsCommerciallyUsable(ClassifyLicense(licenseURL))
+}
+
+func FilterCommerciallyUsable(items []ScrapeItem) []ScrapeItem {
+	out := make([]ScrapeItem, 0, len(items))
+	for _, item := range items {
+		if IsLicenseURLCommerciallyUsable(item.LicenseURL) {
+			out = append(out, item)
+		}
+	}
+	return out
 }

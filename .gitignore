@@ -8,3 +8,5 @@ data/art/
 python_sidecar/.venv/
 __pycache__/
 .venv-312/
+data/*.backup
+data/*.bak-*

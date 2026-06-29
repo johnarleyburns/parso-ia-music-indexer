@@ -643,8 +643,11 @@ func discoverCollection(cfg *config.Config, sqlDB *db.DB, client *http.Client, i
 			break
 		}
 
-		albums := make([]db.AlbumInsert, len(resp.Items))
-		for i, item := range resp.Items {
+		usableItems := ia.FilterCommerciallyUsable(resp.Items)
+		skipped := len(resp.Items) - len(usableItems)
+
+		albums := make([]db.AlbumInsert, len(usableItems))
+		for i, item := range usableItems {
 			albums[i] = db.AlbumInsert{Identifier: item.Identifier, Downloads: item.Downloads}
 		}
 
@@ -664,7 +667,7 @@ func discoverCollection(cfg *config.Config, sqlDB *db.DB, client *http.Client, i
 			Type:         tui.EventCollectionProgress,
 			Timestamp:    time.Now(),
 			CollectionID: coll.CollectionID,
-			Message:      fmt.Sprintf("[%d/%d] %q: +%d new, %d total (of ~%d)", idx, total, coll.Title, inserted, discovered, coll.ExpectedCount),
+			Message:      fmt.Sprintf("[%d/%d] %q: +%d new (skipped %d non-free), %d total (of ~%d)", idx, total, coll.Title, inserted, skipped, discovered, coll.ExpectedCount),
 			Count:        discovered,
 			Total:        coll.ExpectedCount,
 		}

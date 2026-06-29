@@ -14,7 +14,7 @@ func ScrapePage(ctx context.Context, client *http.Client, cursor, query, sort st
 	params.Set("q", query)
 	params.Set("sorts", sort)
 	params.Set("count", fmt.Sprintf("%d", count))
-	params.Set("fields", "identifier,downloads")
+	params.Set("fields", "identifier,downloads,licenseurl")
 	if cursor != "" {
 		params.Set("cursor", cursor)
 	}

@@ -5,9 +5,9 @@
     "category": "classical",
     "curator": "Musopen",
     "url": "https://archive.org/details/musopen",
-    "query": "mediatype:audio AND collection:musopen AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "query": "mediatype:audio AND collection:musopen AND -subject:\"spoken word\" AND -mediatype:audiobook AND -subject:audiobook AND -subject:\"sound effects\" AND -subject:\"sound effect\" AND -subject:\"test tones\" AND -subject:\"non-music\"",
     "item_count": 34,
-    "notes": "Musopen public-domain and Creative Commons classical recordings. Non-commercially-usable licenses (NC/ND/other/unknown) are filtered out in-app at album resolution; only pd, cc0, cc-by, and cc-by-sa are indexed."
+    "notes": "Musopen public-domain and Creative Commons classical recordings. Non-free licenses filtered at scrape time via licenseurl field; only pd, cc0, cc-by, cc-by-sa are indexed."
   },
   {
     "id": "netlabels-free",
@@ -15,8 +15,8 @@
     "category": "electronic",
     "curator": "Internet Archive Netlabels",
     "url": "https://archive.org/details/netlabels",
-    "query": "mediatype:audio AND collection:netlabels AND -subject:\"spoken word\" AND -mediatype:audiobook",
+    "query": "mediatype:audio AND collection:netlabels AND -subject:\"spoken word\" AND -mediatype:audiobook AND -subject:audiobook AND -subject:\"sound effects\" AND -subject:\"sound effect\" AND -subject:sfx AND -subject:\"test tones\" AND -subject:\"test tone\" AND -subject:\"non-music\"",
     "item_count": 76477,
-    "notes": "Internet Archive netlabel releases. Non-commercially-usable licenses (NC/ND/other/unknown) are filtered out in-app at album resolution; only pd, cc0, cc-by, and cc-by-sa are indexed."
+    "notes": "Internet Archive netlabel releases. Non-free licenses filtered at scrape time via licenseurl field; only pd, cc0, cc-by, cc-by-sa are indexed."
   }
 ]

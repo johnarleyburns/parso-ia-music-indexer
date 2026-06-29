@@ -137,3 +137,59 @@ func TestIsMusicContentLanguageCourseDescription(t *testing.T) {
 		t.Errorf("expected non-music for french course description")
 	}
 }
+
+func TestParseDuration_RawSeconds(t *testing.T) {
+	tests := []struct {
+		input string
+		want  float64
+	}{
+		{"", 0},
+		{"720", 720},
+		{"720.0", 720},
+		{"  180  ", 180},
+	}
+	for _, tt := range tests {
+		got := parseDuration(tt.input)
+		if got != tt.want {
+			t.Errorf("parseDuration(%q) = %.1f, want %.1f", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestParseDuration_MMSS(t *testing.T) {
+	tests := []struct {
+		input string
+		want  float64
+	}{
+		{"12:00", 720},
+		{"12:00.5", 720.5},
+		{"3:45", 225},
+		{"0:30", 30},
+		{"1:00", 60},
+		{"0:00", 0},
+	}
+	for _, tt := range tests {
+		got := parseDuration(tt.input)
+		if got != tt.want {
+			t.Errorf("parseDuration(%q) = %.1f, want %.1f", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestParseDuration_HMMSS(t *testing.T) {
+	tests := []struct {
+		input string
+		want  float64
+	}{
+		{"1:12:00", 4320},
+		{"0:00:01", 1},
+		{"0:00:00", 0},
+		{"1:00:00", 3600},
+	}
+	for _, tt := range tests {
+		got := parseDuration(tt.input)
+		if got != tt.want {
+			t.Errorf("parseDuration(%q) = %.1f, want %.1f", tt.input, got, tt.want)
+		}
+	}
+}
