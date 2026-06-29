@@ -78,6 +78,7 @@ type MainModel struct {
 	Browse      BrowseModel
 	Player      PlayerModel
 	Collections CollectionsModel
+	Pills       PillsModel
 
 	Help help.Model
 	Keys keyMap
@@ -90,7 +91,7 @@ type MainModel struct {
 func NewMainModel(cfg *config.Config, sqlDB *sql.DB, events chan ActivityEvent, controls chan ControlCmd, metrics *Metrics, dbPath string) MainModel {
 	return MainModel{
 		Config:    cfg,
-		Tabs:      []string{"Dashboard", "Live Log", "Browse", "Player", "Collections"},
+		Tabs:      []string{"Dashboard", "Live Log", "Browse", "Player", "Collections", "Pills"},
 		ActiveTab: 0,
 		DB:        sqlDB,
 		Events:    events,
@@ -102,6 +103,7 @@ func NewMainModel(cfg *config.Config, sqlDB *sql.DB, events chan ActivityEvent, 
 		Browse:    NewBrowseModel(sqlDB),
 		Player:      NewPlayerModel(sqlDB),
 		Collections: NewCollectionsModel(sqlDB),
+		Pills:       NewPillsModel(sqlDB),
 		Help:        help.New(),
 		Keys:      keys,
 	}
@@ -180,6 +182,11 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.ActiveTab == 4 {
 			var cmd tea.Cmd
 			m.Collections, cmd = m.Collections.Update(msg)
+			return m, cmd
+		}
+		if m.ActiveTab == 5 {
+			var cmd tea.Cmd
+			m.Pills, cmd = m.Pills.Update(msg)
 			return m, cmd
 		}
 		return m, nil
@@ -299,6 +306,11 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Collections, cmd = m.Collections.Update(msg)
 			return m, cmd
 		}
+		if m.ActiveTab == 5 {
+			var cmd tea.Cmd
+			m.Pills, cmd = m.Pills.Update(msg)
+			return m, cmd
+		}
 
 	case SwitchToPlayerMsg:
 		m.ActiveTab = 3
@@ -331,6 +343,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Browse, _ = m.Browse.Update(msg)
 		m.Player, _ = m.Player.Update(msg)
 		m.Collections, _ = m.Collections.Update(msg)
+		m.Pills, _ = m.Pills.Update(msg)
 		return m, cmd
 
 	case statsRefreshMsg:
@@ -363,6 +376,11 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Collections, cmd = m.Collections.Update(msg)
 		return m, cmd
 
+	case pillsRefreshMsg, pillsTracksMsg:
+		var cmd tea.Cmd
+		m.Pills, cmd = m.Pills.Update(msg)
+		return m, cmd
+
 	case playlistProgressMsg:
 		log.Printf("[collections] MainModel.Update: received playlistProgressMsg, routing to Collections.Update")
 		var cmd tea.Cmd
@@ -388,6 +406,8 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Player, cmd = m.Player.Update(msg)
 	case 4:
 		m.Collections, cmd = m.Collections.Update(msg)
+	case 5:
+		m.Pills, cmd = m.Pills.Update(msg)
 	}
 
 	return m, cmd
@@ -412,6 +432,8 @@ func (m MainModel) View() tea.View {
 		content = m.Player.View().Content
 	case 4:
 		content = m.Collections.View().Content
+	case 5:
+		content = m.Pills.View().Content
 	}
 
 	helpView := m.Help.View(m.Keys)
@@ -485,6 +507,14 @@ func (m *MainModel) onTabSwitch(from, to int) tea.Cmd {
 		m.Collections, cmd = m.Collections.Update(tea.WindowSizeMsg{Width: m.Width, Height: m.Height})
 		log.Printf("[collections] onTabSwitch: switching to tab 4, firing refresh cmd")
 		return tea.Batch(cmd, m.Collections.doRefresh())
+	}
+	if from == 5 {
+		m.Pills.mode = pillModeList
+	}
+	if to == 5 {
+		var cmd tea.Cmd
+		m.Pills, cmd = m.Pills.Update(tea.WindowSizeMsg{Width: m.Width, Height: m.Height})
+		return tea.Batch(cmd, m.Pills.doRefresh())
 	}
 	return nil
 }

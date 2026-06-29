@@ -167,6 +167,58 @@ func TestListActivePillsCoverageGate(t *testing.T) {
 	}
 }
 
+func TestListPillsWithCoverage(t *testing.T) {
+	db := testDB(t)
+	makeListenableAlbum(t, db, "amb-1", "ambient", "")
+	makeListenableAlbum(t, db, "amb-2", "ambient drone", "")
+
+	BulkInsertPills(db.Conn, []Pill{
+		{PillID: "amb", Label: "Ambient", ClapPrompt: "ambient", Keywords: "ambient", SortOrder: 1, Enabled: true, MinLibraryCount: 2},
+		{PillID: "tech", Label: "Techno", ClapPrompt: "techno", Keywords: "techno", SortOrder: 2, Enabled: true, MinLibraryCount: 1},
+	})
+
+	pills, err := ListPillsWithCoverage(db.Conn)
+	if err != nil {
+		t.Fatalf("ListPillsWithCoverage: %v", err)
+	}
+	if len(pills) != 2 {
+		t.Fatalf("expected 2 pills, got %d", len(pills))
+	}
+	if pills[0].PillID != "amb" {
+		t.Fatalf("expected amb first by sort_order, got %s", pills[0].PillID)
+	}
+	if pills[0].LibraryCount != 2 || !pills[0].Active {
+		t.Errorf("amb: expected count 2 active=true, got count=%d active=%v", pills[0].LibraryCount, pills[0].Active)
+	}
+	if pills[1].LibraryCount != 0 || pills[1].Active {
+		t.Errorf("tech: expected count 0 active=false, got count=%d active=%v", pills[1].LibraryCount, pills[1].Active)
+	}
+}
+
+func TestTracksForPill(t *testing.T) {
+	db := testDB(t)
+	makeListenableAlbum(t, db, "amb-lo", "ambient", "")
+	makeListenableAlbum(t, db, "amb-hi", "ambient", "")
+	makeListenableAlbum(t, db, "tech", "techno", "")
+
+	db.Conn.Exec(`UPDATE tracks SET listenability_score=0.9 WHERE album_id='amb-hi'`)
+	db.Conn.Exec(`UPDATE tracks SET listenability_score=0.2 WHERE album_id='amb-lo'`)
+
+	tracks, err := TracksForPill(db.Conn, "ambient", 10)
+	if err != nil {
+		t.Fatalf("TracksForPill: %v", err)
+	}
+	if len(tracks) != 2 {
+		t.Fatalf("expected 2 ambient tracks, got %d", len(tracks))
+	}
+	if tracks[0].AlbumID != "amb-hi" {
+		t.Errorf("expected highest-listenability track first, got %s", tracks[0].AlbumID)
+	}
+	if tracks[0].DownloadURL == "" {
+		t.Errorf("expected download URL populated for playback")
+	}
+}
+
 func TestListActivePillsSortOrder(t *testing.T) {
 	db := testDB(t)
 	makeListenableAlbum(t, db, "x-1", "ambient techno", "")

@@ -33,5 +33,20 @@ Sub-threshold pills (breakbeat-bass, dance-club, jazz, classical, reggae-danceha
 are correctly hidden and will appear automatically as coverage grows (Classical via
 the Phase 4 musopen resolution bias).
 
+## Phase 5 — TUI Pills tab (follow-up request)
+COMPLETE.
+- New "Pills" tab (`internal/tui/pills.go`, wired in `internal/tui/model.go` as
+  tab index 5): lists every pill with its live listenable-album count and an
+  active (✓) flag.
+- `[enter]` on a pill drills into its matching tracks (lexical keyword match via
+  `db.TracksForPill`, best-first by listenability/quality); `[enter]` on a track
+  emits `SwitchToPlayerMsg` to play it; `[esc]` returns to the pill list.
+- `[r]` recalculates coverage counts (`db.ListPillsWithCoverage`); the tab also
+  refreshes on switch-in.
+- New DB funcs: `ListPillsWithCoverage`, `TracksForPill` (+ shared
+  `pillKeywordClause`). Tests: `TestListPillsWithCoverage`, `TestTracksForPill`.
+- Note: the TUI tab uses the deterministic lexical match (no sidecar needed); the
+  CLAP+lexical blended feed remains available via the `--pill <id>` CLI.
+
 ## Blockers
 None.

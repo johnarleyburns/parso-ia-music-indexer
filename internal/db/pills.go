@@ -186,22 +186,103 @@ func ListActivePills(db *sql.DB) ([]ActivePill, error) {
 	return active, nil
 }
 
+// PillWithCount is a pill paired with its live listenable-album coverage and
+// whether it currently meets its activation gate (enabled and count >= min).
+type PillWithCount struct {
+	Pill
+	LibraryCount int
+	Active       bool
+}
+
+// ListPillsWithCoverage returns every pill (sorted by display order) with its
+// current listenable-album count and active flag. Used by the Pills tab so the
+// user sees all pills and counts, including those below their activation gate.
+func ListPillsWithCoverage(db *sql.DB) ([]PillWithCount, error) {
+	all, err := ListAllPills(db)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PillWithCount, 0, len(all))
+	for _, p := range all {
+		n, err := CountPillCoverage(db, p.Keywords)
+		if err != nil {
+			return nil, fmt.Errorf("coverage %s: %w", p.PillID, err)
+		}
+		out = append(out, PillWithCount{
+			Pill:         p,
+			LibraryCount: n,
+			Active:       p.Enabled && n >= p.MinLibraryCount,
+		})
+	}
+	return out, nil
+}
+
+// PillTrack is a listenable track matching a pill's keywords, for the drill-down
+// "matching tracks" view.
+type PillTrack struct {
+	TrackID            int
+	Title              string
+	AlbumID            string
+	AlbumTitle         string
+	AlbumCreator       string
+	DownloadURL        string
+	ListenabilityScore float64
+	QualityScore       float64
+}
+
+// TracksForPill returns listenable tracks whose album subjects or own tags match
+// any of the pill keywords, best-first by listenability then quality. Uses the
+// same listenable filter as CountPillCoverage / SearchByText.
+func TracksForPill(db *sql.DB, keywords string, limit int) ([]PillTrack, error) {
+	clause, args := pillKeywordClause(keywords)
+	if clause == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+
+	query := `SELECT t.id, COALESCE(NULLIF(t.title,''), t.filename), t.album_id,
+			COALESCE(NULLIF(a.title,''), a.ia_identifier), COALESCE(a.creator,''),
+			t.download_url, COALESCE(t.listenability_score,0), COALESCE(e.quality_score,0)
+		FROM albums a
+		INNER JOIN tracks t ON t.album_id = a.ia_identifier
+		INNER JOIN track_embeddings e ON e.track_id = t.id
+		WHERE t.status = 'completed'
+		  AND (t.listenability_decision IS NULL OR t.listenability_decision != 'exclude')
+		  AND (t.listenability_stream IS NULL OR t.listenability_stream != 'excluded')
+		  AND (t.listenability_stream IS NULL OR t.listenability_stream != 'longform_candidate')
+		  AND (` + clause + `)
+		ORDER BY t.listenability_score DESC, e.quality_score DESC, t.id ASC
+		LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("tracks for pill: %w", err)
+	}
+	defer rows.Close()
+
+	var out []PillTrack
+	for rows.Next() {
+		var t PillTrack
+		if err := rows.Scan(&t.TrackID, &t.Title, &t.AlbumID, &t.AlbumTitle, &t.AlbumCreator,
+			&t.DownloadURL, &t.ListenabilityScore, &t.QualityScore); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // CountPillCoverage returns the number of distinct listenable albums whose
 // subjects or track tags match any of the pill's comma-separated keywords. The
 // listenable filter mirrors SearchByText: completed tracks with an embedding that
 // are not excluded or longform candidates.
 func CountPillCoverage(db *sql.DB, keywords string) (int, error) {
-	terms := splitKeywords(keywords)
-	if len(terms) == 0 {
+	clause, args := pillKeywordClause(keywords)
+	if clause == "" {
 		return 0, nil
-	}
-
-	clauses := make([]string, 0, len(terms))
-	args := make([]any, 0, len(terms)*2)
-	for _, t := range terms {
-		like := "%" + t + "%"
-		clauses = append(clauses, "(LOWER(a.subjects) LIKE ? OR LOWER(COALESCE(t.tags,'')) LIKE ?)")
-		args = append(args, like, like)
 	}
 
 	query := `SELECT COUNT(DISTINCT a.ia_identifier)
@@ -212,13 +293,30 @@ func CountPillCoverage(db *sql.DB, keywords string) (int, error) {
 		  AND (t.listenability_decision IS NULL OR t.listenability_decision != 'exclude')
 		  AND (t.listenability_stream IS NULL OR t.listenability_stream != 'excluded')
 		  AND (t.listenability_stream IS NULL OR t.listenability_stream != 'longform_candidate')
-		  AND (` + strings.Join(clauses, " OR ") + `)`
+		  AND (` + clause + `)`
 
 	var count int
 	if err := db.QueryRow(query, args...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("count pill coverage: %w", err)
 	}
 	return count, nil
+}
+
+// pillKeywordClause builds the OR-of-LIKE predicate (and its bind args) matching
+// any keyword against album subjects or track tags. Returns "" when no keywords.
+func pillKeywordClause(keywords string) (string, []any) {
+	terms := splitKeywords(keywords)
+	if len(terms) == 0 {
+		return "", nil
+	}
+	clauses := make([]string, 0, len(terms))
+	args := make([]any, 0, len(terms)*2)
+	for _, t := range terms {
+		like := "%" + t + "%"
+		clauses = append(clauses, "(LOWER(a.subjects) LIKE ? OR LOWER(COALESCE(t.tags,'')) LIKE ?)")
+		args = append(args, like, like)
+	}
+	return strings.Join(clauses, " OR "), args
 }
 
 func splitKeywords(keywords string) []string {
