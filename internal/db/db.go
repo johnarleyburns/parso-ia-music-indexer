@@ -199,6 +199,18 @@ func (db *DB) migrate() error {
 			quality_score   REAL,
 			created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
+
+		`CREATE TABLE IF NOT EXISTS pills (
+			pill_id            TEXT PRIMARY KEY,
+			label              TEXT NOT NULL,
+			clap_prompt        TEXT NOT NULL,
+			keywords           TEXT NOT NULL,
+			sort_order         INTEGER NOT NULL DEFAULT 0,
+			enabled            INTEGER NOT NULL DEFAULT 1,
+			min_library_count  INTEGER NOT NULL DEFAULT 10,
+			created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
 	}
 
 	for _, q := range queries {

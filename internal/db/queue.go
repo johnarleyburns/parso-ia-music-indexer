@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+// priorityCollectionID names the collection whose albums are resolved (and thus
+// embedded and made listenable) ahead of the general backlog. The library is
+// currently ~99% netlabels/electronic; biasing resolution toward musopen lets
+// the Classical genre pill cross its coverage gate without a separate worker.
+const priorityCollectionID = "musopen-free"
+
 type AlbumStats struct {
 	Total           int
 	Pending         int
@@ -356,8 +362,9 @@ func ClaimUnresolvedAlbum(db *sql.DB, workerID string) (string, error) {
 		 JOIN collections c ON ca.collection_id = c.collection_id
 		 WHERE a.status = 'pending'
 		 GROUP BY a.ia_identifier
-		 ORDER BY MAX(c.created_at) DESC, a.created_at ASC
+		 ORDER BY MAX(CASE WHEN c.collection_id = ? THEN 1 ELSE 0 END) DESC, MAX(c.created_at) DESC, a.created_at ASC
 		 LIMIT 1`,
+		priorityCollectionID,
 	).Scan(&identifier)
 	if err == sql.ErrNoRows {
 		return "", nil
@@ -396,9 +403,9 @@ func ClaimUnresolvedAlbumBatch(db *sql.DB, workerID string, batchSize int) ([]st
 		 JOIN collections c ON ca.collection_id = c.collection_id
 		 WHERE a.status = 'pending'
 		 GROUP BY a.ia_identifier
-		 ORDER BY MAX(c.created_at) DESC, a.created_at ASC
+		 ORDER BY MAX(CASE WHEN c.collection_id = ? THEN 1 ELSE 0 END) DESC, MAX(c.created_at) DESC, a.created_at ASC
 		 LIMIT ?`,
-		batchSize,
+		priorityCollectionID, batchSize,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("select pending albums: %w", err)

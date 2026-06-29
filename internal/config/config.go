@@ -25,6 +25,8 @@ type Config struct {
 	ListenabilityMinTrackSecs int
 	ListenabilityCleanerAction string
 	FreeOnly                bool
+	Pills                   bool
+	PillID                  string
 }
 
 func Parse() *Config {
@@ -48,6 +50,8 @@ func Parse() *Config {
 	flag.IntVar(&cfg.ListenabilityMinTrackSecs, "listenability-min-track-seconds", envOrDefaultInt("LISTENABILITY_MIN_TRACK_SECS", 60), "Minimum track duration in seconds for listenability scoring")
 	flag.StringVar(&cfg.ListenabilityCleanerAction, "listenability-cleaner-action", envOrDefault("LISTENABILITY_CLEANER_ACTION", "score-only"), "Cleaner action: score-only or mark-unavailable")
 	flag.BoolVar(&cfg.FreeOnly, "free-only", envOrDefaultBool("FREE_ONLY", true), "Index only commercially-usable licenses (pd, cc0, cc-by, cc-by-sa); mark others unavailable")
+	flag.BoolVar(&cfg.Pills, "pills", false, "List active genre pills (those with enough listenable music) and exit")
+	flag.StringVar(&cfg.PillID, "pill", "", "Render a similar-music feed for the given pill id (e.g. ambient-drone)")
 	flag.Parse()
 
 	return cfg

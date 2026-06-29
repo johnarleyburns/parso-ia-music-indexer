@@ -1,0 +1,100 @@
+[
+  {
+    "id": "experimental-noise",
+    "label": "Experimental / Noise",
+    "clap_prompt": "experimental noise music, abstract industrial soundscapes, avant-garde electronics",
+    "keywords": "experimental, noise, avantgarde, avant-garde, power electronics, industrial, glitch, abstract",
+    "sort_order": 1
+  },
+  {
+    "id": "idm-electronica",
+    "label": "IDM / Electronica",
+    "clap_prompt": "intelligent dance music, glitchy electronica, melodic electronic music",
+    "keywords": "idm, electronica, electronic, electro, generative, chip",
+    "sort_order": 2
+  },
+  {
+    "id": "ambient-drone",
+    "label": "Ambient / Drone",
+    "clap_prompt": "ambient drone music, atmospheric soundscapes, dark ambient textures",
+    "keywords": "ambient, drone, soundscape, atmospheric, space ambient, dark ambient",
+    "sort_order": 3
+  },
+  {
+    "id": "techno-house",
+    "label": "Techno / House",
+    "clap_prompt": "techno and house music, minimal four on the floor electronic dance",
+    "keywords": "techno, house, deep house, dub techno, minimal, tech house",
+    "sort_order": 4
+  },
+  {
+    "id": "rock-indie-metal",
+    "label": "Rock / Indie / Metal",
+    "clap_prompt": "indie rock, alternative rock, metal, shoegaze and post-rock guitars",
+    "keywords": "rock, indie, metal, punk, shoegaze, post-rock, postrock, postmetal, sludge, alternative",
+    "sort_order": 5
+  },
+  {
+    "id": "downtempo-dub",
+    "label": "Downtempo / Dub",
+    "clap_prompt": "downtempo dub, trip hop, chillout lounge beats",
+    "keywords": "downtempo, dub, trip hop, lounge, chillout, chill",
+    "sort_order": 6
+  },
+  {
+    "id": "field-world",
+    "label": "Field / World",
+    "clap_prompt": "field recordings, world and folk traditional music, tribal sounds",
+    "keywords": "field recording, field recordings, world, folk, tribal, ethnic, traditional",
+    "sort_order": 7
+  },
+  {
+    "id": "trance-psy",
+    "label": "Trance / Psy",
+    "clap_prompt": "trance and psytrance, goa psychedelic electronic music",
+    "keywords": "trance, psy, psytrance, goa",
+    "sort_order": 8
+  },
+  {
+    "id": "hiphop-beats",
+    "label": "Hip-Hop / Beats",
+    "clap_prompt": "hip hop instrumentals, boom bap beats, beat tape production",
+    "keywords": "hip hop, hip-hop, hiphop, beat, instrumental hip-hop, boom bap",
+    "sort_order": 9
+  },
+  {
+    "id": "breakbeat-bass",
+    "label": "Breakbeat / Bass",
+    "clap_prompt": "breakbeat, breakcore, dubstep and bass music, drum and bass",
+    "keywords": "breakcore, breakbeat, breaks, dubstep, grime, jungle, drum and bass, dnb",
+    "sort_order": 10
+  },
+  {
+    "id": "dance-club",
+    "label": "Dance / Club",
+    "clap_prompt": "dance club music, disco, electronic dance",
+    "keywords": "dance, club, disco, edm",
+    "sort_order": 11
+  },
+  {
+    "id": "jazz",
+    "label": "Jazz",
+    "clap_prompt": "jazz music, swing, bebop, jazz fusion",
+    "keywords": "jazz, fusion, swing, bebop",
+    "sort_order": 12
+  },
+  {
+    "id": "classical",
+    "label": "Classical",
+    "clap_prompt": "classical music, orchestra, piano, chamber and baroque",
+    "keywords": "classical, orchestra, symphony, piano, chamber, baroque, opera, string quartet, chopin, sonata",
+    "sort_order": 13
+  },
+  {
+    "id": "reggae-dancehall",
+    "label": "Reggae / Dancehall",
+    "clap_prompt": "reggae and dancehall, ska and dub reggae rhythms",
+    "keywords": "reggae, dub reggae, dancehall, ska, rasta",
+    "sort_order": 14
+  }
+]

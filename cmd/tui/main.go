@@ -745,6 +745,13 @@ func runSeedCollections(cfg *config.Config) {
 		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "Seeded %d new collections (INSERT OR IGNORE)\n", n)
+
+	np, err := db.SeedPills(sqlDB.Conn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "seed pills error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "Seeded %d new pills (INSERT OR IGNORE)\n", np)
 }
 
 func main() {
@@ -762,6 +769,16 @@ func main() {
 
 	if cfg.SearchText != "" {
 		runTextSearch(cfg)
+		return
+	}
+
+	if cfg.Pills {
+		runListPills(cfg)
+		return
+	}
+
+	if cfg.PillID != "" {
+		runPillFeed(cfg)
 		return
 	}
 
@@ -1906,6 +1923,15 @@ func runTUI(cfg *config.Config) {
 		fmt.Fprintf(os.Stderr, "Seeded %d collections\n", seeded)
 	}
 
+	pillsSeeded, err := db.SeedPillsIfEmpty(sqlDB.Conn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error seeding pills: %v\n", err)
+		os.Exit(1)
+	}
+	if pillsSeeded > 0 {
+		fmt.Fprintf(os.Stderr, "Seeded %d pills\n", pillsSeeded)
+	}
+
 	compReset, unavReset, err := db.MigrateListenabilityV1ToV2(sqlDB.Conn)
 	if err != nil {
 		log.Printf("[migration] v1→v2 migration error: %v", err)
@@ -1993,6 +2019,93 @@ func runTextSearch(cfg *config.Config) {
 	}
 }
 
+func runListPills(cfg *config.Config) {
+	sqlDB, err := db.Open(cfg.DBPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error opening database: %v\n", err)
+		os.Exit(1)
+	}
+	defer sqlDB.Close()
+
+	if _, err := db.SeedPillsIfEmpty(sqlDB.Conn); err != nil {
+		fmt.Fprintf(os.Stderr, "error seeding pills: %v\n", err)
+		os.Exit(1)
+	}
+
+	pills, err := db.ListActivePills(sqlDB.Conn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error listing pills: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(pills) == 0 {
+		fmt.Println("No active pills yet (not enough listenable music matches any pill's keywords).")
+		return
+	}
+
+	fmt.Printf("Active pills (%d):\n\n", len(pills))
+	for _, p := range pills {
+		fmt.Printf("  %-22s %-22s (%d listenable albums)\n", p.PillID, p.Label, p.LibraryCount)
+	}
+}
+
+func runPillFeed(cfg *config.Config) {
+	sqlDB, err := db.Open(cfg.DBPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error opening database: %v\n", err)
+		os.Exit(1)
+	}
+	defer sqlDB.Close()
+
+	if _, err := db.SeedPillsIfEmpty(sqlDB.Conn); err != nil {
+		fmt.Fprintf(os.Stderr, "error seeding pills: %v\n", err)
+		os.Exit(1)
+	}
+
+	pill, err := db.GetPillByID(sqlDB.Conn, cfg.PillID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pill %q not found. Run with --pills to list available pills.\n", cfg.PillID)
+		os.Exit(1)
+	}
+
+	logDir := filepath.Dir(cfg.DBPath)
+	sidecarProc, clapClient, err := clap.EnsureSidecar(cfg.ClapHost, cfg.ClapPort, cfg.ClapSidecarDir, logDir, func(msg string) {
+		log.Printf("[sidecar] %s", msg)
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "CLAP sidecar error: %v\n", err)
+		os.Exit(1)
+	}
+	if sidecarProc != nil {
+		defer sidecarProc.Stop()
+	}
+	defer clapClient.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	textVec, err := clapClient.GetTextEmbedding(ctx, pill.ClapPrompt)
+	cancel()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "text embedding error: %v\n", err)
+		os.Exit(1)
+	}
+
+	results, err := db.SearchByText(sqlDB.Conn, textVec, pill.Keywords, 20)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pill feed error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(results) == 0 {
+		fmt.Printf("No tracks found for pill %q (%s).\n", pill.PillID, pill.Label)
+		return
+	}
+
+	fmt.Printf("Feed for pill %q — %s (%d tracks):\n\n", pill.PillID, pill.Label, len(results))
+	for i, r := range results {
+		fmt.Printf("  %2d. %.4f (clap=%.4f pill=%.4f)  %s — %s\n", i+1, r.Similarity, r.CLAPSimilarity, r.PillScore, r.Title, r.AlbumTitle)
+	}
+}
+
 func runHeadless(cfg *config.Config) {
 	sqlDB, err := db.Open(cfg.DBPath)
 	if err != nil {
@@ -2008,6 +2121,15 @@ func runHeadless(cfg *config.Config) {
 	}
 	if seeded > 0 {
 		fmt.Fprintf(os.Stderr, "Seeded %d collections\n", seeded)
+	}
+
+	pillsSeeded, err := db.SeedPillsIfEmpty(sqlDB.Conn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error seeding pills: %v\n", err)
+		os.Exit(1)
+	}
+	if pillsSeeded > 0 {
+		fmt.Fprintf(os.Stderr, "Seeded %d pills\n", pillsSeeded)
 	}
 
 	compReset, unavReset, err := db.MigrateListenabilityV1ToV2(sqlDB.Conn)
